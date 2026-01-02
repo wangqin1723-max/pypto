@@ -8,31 +8,34 @@
  * See LICENSE in the root of the software repository for the full text of the License.
  * -----------------------------------------------------------------------------------------------------------
  */
-#include "pypto/core/error.h"
 
-#include <sstream>
-#include <string>
+/**
+ * @file pybind.cpp
+ * @brief Main PyBind11 module definition
+ *
+ * This file serves as the entry point for the PyPTO Python module.
+ * It imports and registers all sub-module bindings (errors, tensors, ops, etc.)
+ * to create the complete Python API.
+ */
 
-namespace pypto {
+#include <pybind11/pybind11.h>
 
-std::string Error::GetFormattedStackTrace() const { return Backtrace::FormatStackTrace(stack_trace_); }
+#include "./bindings.h"
+#include "pypto/core/common.h"
 
-std::string Error::GetFullMessage() const {
-  std::ostringstream oss;
+namespace py = pybind11;
 
-  oss << what();
+PYBIND11_MODULE(pypto_core, m) {
+  m.doc() = PYPTO_PYBIND_MODULE_DOC;
 
-  // Append C++ stack trace
-  std::string stack_trace = GetFormattedStackTrace();
-  if (!stack_trace.empty()) {
-    oss << "\n\nC++ Traceback (most recent call last):\n";
-    oss << stack_trace;
-  } else {
-    oss << "\n\nNo stack trace available. \n"
-           "(Tip: Build with CMake in Debug or RelWithDebInfo mode to enable stack trace support.)";
-  }
+  // Register error handling bindings
+  pypto::python::BindErrors(m);
 
-  return oss.str();
+  // Register testing utilities (exposed as pypto.testing)
+  pypto::python::BindTesting(m);
+
+  // Future bindings can be added here:
+  // pypto::python::BindTensors(m);
+  // pypto::python::BindOps(m);
+  // pypto::python::BindDevices(m);
 }
-
-}  // namespace pypto

@@ -112,19 +112,6 @@ std::string ReadSourceLine(const std::string& filename, int lineno) {
   return "";
 }
 
-std::string DemangleFunctionName(std::string name) {
-  int status = 0;
-  size_t length = name.size();
-  char* demangled_name = abi::__cxa_demangle(name.c_str(), nullptr, &length, &status);
-  if (demangled_name && status == 0 && length > 0) {
-    name = demangled_name;
-  }
-  if (demangled_name) {
-    std::free(demangled_name);
-  }
-  return name;
-}
-
 std::string Backtrace::FormatStackTrace(const std::vector<StackFrame>& frames) {
   if (frames.empty()) {
     return "";
@@ -143,13 +130,7 @@ std::string Backtrace::FormatStackTrace(const std::vector<StackFrame>& frames) {
         // Skip libbacktrace and pybind11 frames
         continue;
       }
-      oss << " File \"" << frame.filename << "\", line " << frame.lineno;
-
-      std::string func_name = DemangleFunctionName(frame.function);
-      if (!func_name.empty() && func_name != "<unknown>") {
-        oss << " in " << func_name;
-      }
-      oss << "\n";
+      oss << " File \"" << frame.filename << "\", line " << frame.lineno << "\n";
 
       // Try to read and display the source line
       std::string source_line = ReadSourceLine(frame.filename, frame.lineno);

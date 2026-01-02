@@ -121,6 +121,9 @@ htmlcov/
 .dmypy.json
 dmypy.json
 
+# ruff
+.ruff_cache/
+
 # Pyre type checker
 .pyre/
 
@@ -130,6 +133,7 @@ dmypy.json
 .history/
 .agent/
 .copilot/
+.claude
 
 # Documentation build
 docs/_build/

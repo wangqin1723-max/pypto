@@ -64,15 +64,34 @@ select = [
     "W",  # pycodestyle warnings, https://docs.astral.sh/ruff/rules/#warning-w
     "F",  # pyflakes, https://docs.astral.sh/ruff/rules/#pyflakes-f
 ]
-ignore = []
+ignore = [
+  "ANN401",  # flake8-annotations: any-type
+  "PLR2004", # pylint: magic-value-comparison
+]
+fixable = ["ALL"]
 
 [tool.ruff.format]
 quote-style = "double"
 skip-magic-trailing-comma = false
 line-ending = "lf"
 
-[tool.ruff.lint.isort]
-known-first-party = ["pypto"]
+[tool.setuptools]
+packages = ["pypto"]
+package-dir = {"" = "python"}
+
+[tool.setuptools.package-data]
+pypto = ["py.typed", "*.pyi", "**/*.pyi"]
+
+[tool.pyright]
+include = ["python/pypto"]
+exclude = ["**/__pycache__", "build", "dist"]
+typeCheckingMode = "basic"
+pythonVersion = "3.9"
+reportMissingTypeStubs = false
+reportMissingModuleSource = false
 
 [tool.pylint]
-disbale="all"
+# Pylint is not used in this project, but as it is a widely used linter,
+# we provide basic configuration for a consistent developer experience.
+max-line-length = 110
+disable = ["missing-docstring"]

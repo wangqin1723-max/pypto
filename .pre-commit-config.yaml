@@ -43,7 +43,7 @@ repos:
           args:
             - --root=include
             - --linelength=110
-            - --filter=-whitespace/parens,-whitespace/indent_namespace
+            - --filter=-whitespace/parens,-whitespace/indent_namespace,-runtime/references
 
     - repo: local
       hooks:

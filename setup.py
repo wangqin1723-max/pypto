@@ -8,10 +8,11 @@
 # -----------------------------------------------------------------------------------------------------------
 
 import os
-import sys
-import subprocess
 import platform
+import subprocess
+import sys
 from pathlib import Path
+
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext as _build_ext
 
@@ -22,7 +23,7 @@ class CMakeBuild(_build_ext):
     def run(self):
         """Run CMake build process."""
         try:
-            subprocess.check_output(['cmake', '--version'])
+            subprocess.check_output(["cmake", "--version"])
         except OSError:
             raise RuntimeError("CMake must be installed to build this package")
 
@@ -40,41 +41,33 @@ class CMakeBuild(_build_ext):
         build_temp.mkdir(parents=True, exist_ok=True)
 
         # Determine build type
-        cfg = 'Debug' if self.debug else 'Release'
+        cfg = "Debug" if self.debug else "Release"
 
         # CMake configuration arguments
         cmake_args = [
-            f'-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={build_lib}',
-            f'-DPYTHON_EXECUTABLE={sys.executable}',
-            f'-DCMAKE_BUILD_TYPE={cfg}',
+            f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={build_lib}",
+            f"-DPYTHON_EXECUTABLE={sys.executable}",
+            f"-DCMAKE_BUILD_TYPE={cfg}",
         ]
 
         # Build arguments
-        build_args = ['--config', cfg]
+        build_args = ["--config", cfg]
 
         # Add parallel build flag
         if platform.system() != "Windows":
-            build_args += ['--', f'-j{os.cpu_count() or 4}']
+            build_args += ["--", f"-j{os.cpu_count() or 4}"]
         else:
-            build_args += ['--', f'/m:{os.cpu_count() or 4}']
+            build_args += ["--", f"/m:{os.cpu_count() or 4}"]
 
         # Set CMAKE_BUILD_PARALLEL_LEVEL
         env = os.environ.copy()
-        env['CMAKE_BUILD_PARALLEL_LEVEL'] = str(os.cpu_count() or 4)
+        env["CMAKE_BUILD_PARALLEL_LEVEL"] = str(os.cpu_count() or 4)
 
         # Run CMake configuration
-        subprocess.check_call(
-            ['cmake', str(source_dir)] + cmake_args,
-            cwd=str(build_temp),
-            env=env
-        )
+        subprocess.check_call(["cmake", str(source_dir)] + cmake_args, cwd=str(build_temp), env=env)
 
         # Run CMake build
-        subprocess.check_call(
-            ['cmake', '--build', '.'] + build_args,
-            cwd=str(build_temp),
-            env=env
-        )
+        subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=str(build_temp), env=env)
 
 
 # The directory containing this file
@@ -86,7 +79,7 @@ VERSION = "0.1.0"
 # Define a dummy extension to trigger the build
 ext_modules = [
     Extension(
-        "_pypto_core",
+        "pypto_core",
         sources=[],  # CMake handles sources
     ),
 ]

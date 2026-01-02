@@ -1,0 +1,46 @@
+# Copyright (c) PyPTO Contributors.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+
+# PyBind11 Python bindings
+
+# Collect all binding source files
+set(PYPTO_BINDING_SOURCES
+    pybind.cpp
+    modules/error.cpp
+    modules/testing.cpp
+)
+
+# Make paths absolute
+list(TRANSFORM PYPTO_SOURCES PREPEND "${CMAKE_SOURCE_DIR}/")
+
+# Make paths absolute
+list(TRANSFORM PYPTO_BINDING_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
+
+# Export to parent scope
+set(PYPTO_BINDING_SOURCES ${PYPTO_BINDING_SOURCES} PARENT_SCOPE)
+
+# Set binding include directory
+set(PYPTO_BINDING_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR} PARENT_SCOPE)
+
+# Create the pybind11 module
+pybind11_add_module(${PROJECT_NAME}
+    ${PYPTO_BINDING_SOURCES}
+    ${PYPTO_SOURCES}
+)
+
+# Link with libbacktrace
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${LIBBACKTRACE_INSTALL_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(${PROJECT_NAME} PRIVATE libbacktrace)
+
+# Set output directory
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)

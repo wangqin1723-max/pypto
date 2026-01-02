@@ -13,7 +13,7 @@
 # limitations under the License.
 
 cmake_minimum_required(VERSION 3.15)
-project(pypto)
+project(pypto_core)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -72,30 +72,5 @@ set(PYPTO_SOURCES
     src/core/error.cpp
 )
 
-# Create the pybind11 module
-pybind11_add_module(_pypto_core
-    python/bindings.cpp
-    ${PYPTO_SOURCES}
-)
-
-# Link with libbacktrace
-target_include_directories(_pypto_core PRIVATE ${LIBBACKTRACE_INSTALL_DIR}/include)
-target_link_libraries(_pypto_core PRIVATE libbacktrace)
-
-if(APPLE)
-    find_program(DSYMUTIL dsymutil)
-    mark_as_advanced(DSYMUTIL)
-    add_custom_command(
-        TARGET _pypto_core
-        POST_BUILD
-        COMMAND ${DSYMUTIL} ARGS $<TARGET_FILE:_pypto_core>
-        COMMENT "[COMMAND] dsymutil $<TARGET_FILE:_pypto_core>"
-        VERBATIM
-    )
-    message(STATUS "running dsymutil on macos to generate debugging symbols for backtraces")
-endif()
-
-# Set output directory
-set_target_properties(_pypto_core PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-)
+# Include Python bindings
+add_subdirectory(python/pybind)
