@@ -58,7 +58,7 @@ class TestSpan:
 
     def test_span_immutability(self):
         """Test that Span attributes are immutable."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
 
         # Attempting to modify should raise AttributeError
         with pytest.raises(AttributeError):
@@ -153,7 +153,7 @@ class TestBinaryExpressions:
 
     def test_add_creation(self):
         """Test creating an Add expression."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         y = ir.Var("y", span)
         add_expr = ir.Add(x, y, span)
@@ -163,7 +163,7 @@ class TestBinaryExpressions:
 
     def test_add_is_binary_expr(self):
         """Test that Add is an instance of BinaryExpr."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         y = ir.Var("y", span)
         add_expr = ir.Add(x, y, span)
@@ -174,7 +174,7 @@ class TestBinaryExpressions:
 
     def test_sub_creation(self):
         """Test creating a Sub expression."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         y = ir.Var("y", span)
         sub_expr = ir.Sub(x, y, span)
@@ -184,7 +184,7 @@ class TestBinaryExpressions:
 
     def test_mul_creation(self):
         """Test creating a Mul expression."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         y = ir.Var("y", span)
         mul_expr = ir.Mul(x, y, span)
@@ -194,7 +194,7 @@ class TestBinaryExpressions:
 
     def test_floatdiv_creation(self):
         """Test creating a FloatDiv expression."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         y = ir.Var("y", span)
         div_expr = ir.FloatDiv(x, y, span)
@@ -204,7 +204,7 @@ class TestBinaryExpressions:
 
     def test_floormod_creation(self):
         """Test creating a FloorMod expression."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         y = ir.Var("y", span)
         mod_expr = ir.FloorMod(x, y, span)
@@ -214,7 +214,7 @@ class TestBinaryExpressions:
 
     def test_floordiv_creation(self):
         """Test creating a FloorDiv expression."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         y = ir.Var("y", span)
         floordiv_expr = ir.FloorDiv(x, y, span)
@@ -224,7 +224,7 @@ class TestBinaryExpressions:
 
     def test_comparison_ops(self):
         """Test creating comparison expressions."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         y = ir.Var("y", span)
 
@@ -248,7 +248,7 @@ class TestBinaryExpressions:
 
     def test_logical_ops(self):
         """Test creating logical expressions."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         y = ir.Var("y", span)
 
@@ -263,7 +263,7 @@ class TestBinaryExpressions:
 
     def test_bitwise_ops(self):
         """Test creating bitwise expressions."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         y = ir.Var("y", span)
 
@@ -284,7 +284,7 @@ class TestBinaryExpressions:
 
     def test_min_max(self):
         """Test creating Min and Max expressions."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         y = ir.Var("y", span)
 
@@ -296,7 +296,7 @@ class TestBinaryExpressions:
 
     def test_pow(self):
         """Test creating Pow expression."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         y = ir.Var("y", span)
 
@@ -310,7 +310,7 @@ class TestUnaryExpressions:
 
     def test_neg_creation(self):
         """Test creating a Neg expression."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         neg_expr = ir.Neg(x, span)
 
@@ -320,7 +320,7 @@ class TestUnaryExpressions:
 
     def test_abs_creation(self):
         """Test creating an Abs expression."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         abs_expr = ir.Abs(x, span)
 
@@ -328,7 +328,7 @@ class TestUnaryExpressions:
 
     def test_not_creation(self):
         """Test creating a Not expression."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         not_expr = ir.Not(x, span)
 
@@ -336,7 +336,7 @@ class TestUnaryExpressions:
 
     def test_bitnot_creation(self):
         """Test creating a BitNot expression."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         bitnot_expr = ir.BitNot(x, span)
 
@@ -442,7 +442,7 @@ class TestImmutability:
 
     def test_expr_operands_immutable(self):
         """Test that binary expression operands cannot be modified."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
         y = ir.Var("y", span)
         add_expr = ir.Add(x, y, span)
@@ -453,7 +453,7 @@ class TestImmutability:
 
     def test_span_immutable_in_node(self):
         """Test that span attribute in IRNode is immutable."""
-        span = ir.Span("test.py", 1, 1, 1, 10)
+        span = ir.Span.unknown()
         x = ir.Var("x", span)
 
         # Attempting to modify should raise AttributeError

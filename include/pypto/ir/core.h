@@ -12,6 +12,7 @@
 #ifndef PYPTO_IR_CORE_H_
 #define PYPTO_IR_CORE_H_
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -85,7 +86,51 @@ class IRNode {
 };
 using IRNodePtr = std::shared_ptr<const IRNode>;
 
+/**
+ * @brief Reference equality operator for IRNodePtr
+ *
+ * Compares two expression pointers by their address (reference equality).
+ * Two IRNodePtr are equal only if they point to the same object.
+ *
+ * @param lhs Left-hand side expression pointer
+ * @param rhs Right-hand side expression pointer
+ * @return true if pointers reference the same object
+ */
+inline bool operator==(const IRNodePtr& lhs, const IRNodePtr& rhs) { return lhs.get() == rhs.get(); }
+
+/**
+ * @brief Reference inequality operator for IRNodePtr
+ *
+ * @param lhs Left-hand side expression pointer
+ * @param rhs Right-hand side expression pointer
+ * @return true if pointers reference different objects
+ */
+inline bool operator!=(const IRNodePtr& lhs, const IRNodePtr& rhs) { return !(lhs == rhs); }
+
 }  // namespace ir
 }  // namespace pypto
+
+// std::hash specialization for IRNodePtr (reference-based hash)
+namespace std {
+/**
+ * @brief Hash specialization for IRNodePtr
+ *
+ * Computes hash based on pointer address (reference hash).
+ * Enables use of IRNodePtr in std::unordered_map and std::unordered_set
+ * with reference equality semantics.
+ *
+ * Usage:
+ * @code
+ * std::unordered_map<pypto::ir::IRNodePtr, int> my_map;
+ * @endcode
+ */
+template <>
+struct hash<pypto::ir::IRNodePtr> {
+  size_t operator()(const pypto::ir::IRNodePtr& ptr) const noexcept {
+    return std::hash<const pypto::ir::IRNode*>{}(ptr.get());
+  }
+};
+
+}  // namespace std
 
 #endif  // PYPTO_IR_CORE_H_

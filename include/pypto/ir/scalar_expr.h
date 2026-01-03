@@ -23,7 +23,7 @@ namespace pypto {
 namespace ir {
 
 // Forward declaration for visitor pattern
-// Implementation in pypto/ir/transform/visitor.h
+// Implementation in pypto/ir/transform/base/visitor.h
 class ExprVisitor;
 
 /**

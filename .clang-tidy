@@ -24,7 +24,8 @@ Checks: >
   -modernize-return-braced-init-list,
   -modernize-use-auto,
   -modernize-use-trailing-return-type,
-  -performance-enum-size
+  -performance-enum-size,
+  -portability-template-virtual-member-function
 
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*(include/pypto/|src/|3rdparty/libbacktrace/include)/.*\.h$'

@@ -9,7 +9,7 @@
  * -----------------------------------------------------------------------------------------------------------
  */
 
-#include "pypto/ir/transform/visitor.h"
+#include "pypto/ir/transform/base/visitor.h"
 
 #include "pypto/ir/scalar_expr.h"
 

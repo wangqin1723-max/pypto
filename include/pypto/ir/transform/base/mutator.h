@@ -9,10 +9,10 @@
  * -----------------------------------------------------------------------------------------------------------
  */
 
-#ifndef PYPTO_IR_TRANSFORM_MUTATOR_H_
-#define PYPTO_IR_TRANSFORM_MUTATOR_H_
+#ifndef PYPTO_IR_TRANSFORM_BASE_MUTATOR_H_
+#define PYPTO_IR_TRANSFORM_BASE_MUTATOR_H_
 
-#include "pypto/ir/transform/functor.h"
+#include "pypto/ir/transform/base/functor.h"
 
 namespace pypto {
 namespace ir {
@@ -71,4 +71,4 @@ class ExprMutator : public ExprFunctor<ExprPtr> {
 }  // namespace ir
 }  // namespace pypto
 
-#endif  // PYPTO_IR_TRANSFORM_MUTATOR_H_
+#endif  // PYPTO_IR_TRANSFORM_BASE_MUTATOR_H_

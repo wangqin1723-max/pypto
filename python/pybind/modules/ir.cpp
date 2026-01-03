@@ -20,6 +20,7 @@
 #include "pypto/ir/core.h"
 #include "pypto/ir/scalar_expr.h"
 #include "pypto/ir/transform/printer.h"
+#include "pypto/ir/transform/transformers.h"
 
 namespace py = pybind11;
 
@@ -146,6 +147,22 @@ void BindIR(py::module_& m) {
   BIND_UNARY_EXPR(BitNot, "Bitwise not expression (~operand)")
 
 #undef BIND_UNARY_EXPR
+
+  // Bind structural hash and equality functions
+  ir.def("structural_hash", &structural_hash, py::arg("expr"), py::arg("enable_auto_mapping") = false,
+         "Compute structural hash of an expression. "
+         "Ignores source location (Span). Two expressions with identical structure hash to the same value. "
+         "If enable_auto_mapping=True, variable names are ignored (e.g., x+1 and y+1 hash the same). "
+         "If enable_auto_mapping=False (default), variable objects must be exactly the same (not just same "
+         "name).");
+
+  ir.def("structural_equal", &structural_equal, py::arg("lhs"), py::arg("rhs"),
+         py::arg("enable_auto_mapping") = false,
+         "Check if two expressions are structurally equal. "
+         "Ignores source location (Span). Returns True if expressions have identical structure. "
+         "If enable_auto_mapping=True, automatically map variables (e.g., x+1 equals y+1). "
+         "If enable_auto_mapping=False (default), variable objects must be exactly the same (not just same "
+         "name).");
 }
 
 }  // namespace python

@@ -45,7 +45,6 @@ class Span:
             end_line: Ending line (1-indexed, -1 means unknown)
             end_column: Ending column (1-indexed, -1 means unknown)
         """
-        ...
 
     def to_string(self) -> str:
         """Convert span to string representation.
@@ -53,7 +52,6 @@ class Span:
         Returns:
             String in format "filename:begin_line:begin_column"
         """
-        ...
 
     def is_valid(self) -> bool:
         """Check if the span has valid coordinates.
@@ -61,7 +59,6 @@ class Span:
         Returns:
             True if all line/column numbers are positive
         """
-        ...
 
     @staticmethod
     def unknown() -> Span:
@@ -70,7 +67,6 @@ class Span:
         Returns:
             Span with empty filename and invalid coordinates
         """
-        ...
 
     def __repr__(self) -> str: ...
     def __str__(self) -> str: ...
@@ -87,7 +83,6 @@ class Op:
         Args:
             name: Operation name
         """
-        ...
 
 class IRNode:
     """Base class for all IR nodes."""
@@ -104,7 +99,6 @@ class Expr(IRNode):
         Returns:
             Expression as a string with minimal parentheses
         """
-        ...
 
     def __repr__(self) -> str:
         """Detailed representation of the expression.
@@ -112,7 +106,6 @@ class Expr(IRNode):
         Returns:
             Expression with type information
         """
-        ...
 
 class Var(Expr):
     """Variable reference expression."""
@@ -127,7 +120,6 @@ class Var(Expr):
             name: Variable name
             span: Source location
         """
-        ...
 
 class ConstInt(Expr):
     """Constant integer expression."""
@@ -142,7 +134,6 @@ class ConstInt(Expr):
             value: Integer value
             span: Source location
         """
-        ...
 
 class Call(Expr):
     """Function call expression."""
@@ -161,7 +152,6 @@ class Call(Expr):
             args: List of argument expressions
             span: Source location
         """
-        ...
 
 class BinaryExpr(Expr):
     """Base class for binary operations."""
@@ -189,7 +179,6 @@ class Add(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class Sub(BinaryExpr):
     """Subtraction expression (left - right)."""
@@ -202,7 +191,6 @@ class Sub(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class Mul(BinaryExpr):
     """Multiplication expression (left * right)."""
@@ -215,7 +203,6 @@ class Mul(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class FloorDiv(BinaryExpr):
     """Floor division expression (left // right)."""
@@ -228,7 +215,6 @@ class FloorDiv(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class FloorMod(BinaryExpr):
     """Floor modulo expression (left % right)."""
@@ -241,7 +227,6 @@ class FloorMod(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class FloatDiv(BinaryExpr):
     """Float division expression (left / right)."""
@@ -254,7 +239,6 @@ class FloatDiv(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class Min(BinaryExpr):
     """Minimum expression (min(left, right))."""
@@ -267,7 +251,6 @@ class Min(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class Max(BinaryExpr):
     """Maximum expression (max(left, right))."""
@@ -280,7 +263,6 @@ class Max(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class Pow(BinaryExpr):
     """Power expression (left ** right)."""
@@ -293,7 +275,6 @@ class Pow(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class Eq(BinaryExpr):
     """Equality expression (left == right)."""
@@ -306,7 +287,6 @@ class Eq(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class Ne(BinaryExpr):
     """Inequality expression (left != right)."""
@@ -319,7 +299,6 @@ class Ne(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class Lt(BinaryExpr):
     """Less than expression (left < right)."""
@@ -332,7 +311,6 @@ class Lt(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class Le(BinaryExpr):
     """Less than or equal to expression (left <= right)."""
@@ -345,7 +323,6 @@ class Le(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class Gt(BinaryExpr):
     """Greater than expression (left > right)."""
@@ -358,7 +335,6 @@ class Gt(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class Ge(BinaryExpr):
     """Greater than or equal to expression (left >= right)."""
@@ -371,7 +347,6 @@ class Ge(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class And(BinaryExpr):
     """Logical and expression (left and right)."""
@@ -384,7 +359,6 @@ class And(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class Or(BinaryExpr):
     """Logical or expression (left or right)."""
@@ -397,7 +371,6 @@ class Or(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class Xor(BinaryExpr):
     """Logical xor expression (left xor right)."""
@@ -410,7 +383,6 @@ class Xor(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class BitAnd(BinaryExpr):
     """Bitwise and expression (left & right)."""
@@ -423,7 +395,6 @@ class BitAnd(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class BitOr(BinaryExpr):
     """Bitwise or expression (left | right)."""
@@ -436,7 +407,6 @@ class BitOr(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class BitXor(BinaryExpr):
     """Bitwise xor expression (left ^ right)."""
@@ -449,7 +419,6 @@ class BitXor(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class BitShiftLeft(BinaryExpr):
     """Bitwise left shift expression (left << right)."""
@@ -462,7 +431,6 @@ class BitShiftLeft(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class BitShiftRight(BinaryExpr):
     """Bitwise right shift expression (left >> right)."""
@@ -475,7 +443,6 @@ class BitShiftRight(BinaryExpr):
             right: Right operand
             span: Source location
         """
-        ...
 
 class Abs(UnaryExpr):
     """Absolute value expression (abs(operand))."""
@@ -487,7 +454,6 @@ class Abs(UnaryExpr):
             operand: Operand expression
             span: Source location
         """
-        ...
 
 class Neg(UnaryExpr):
     """Negation expression (-operand)."""
@@ -499,7 +465,6 @@ class Neg(UnaryExpr):
             operand: Operand expression
             span: Source location
         """
-        ...
 
 class Not(UnaryExpr):
     """Logical not expression (not operand)."""
@@ -511,7 +476,6 @@ class Not(UnaryExpr):
             operand: Operand expression
             span: Source location
         """
-        ...
 
 class BitNot(UnaryExpr):
     """Bitwise not expression (~operand)."""
@@ -523,4 +487,34 @@ class BitNot(UnaryExpr):
             operand: Operand expression
             span: Source location
         """
-        ...
+
+def structural_hash(expr: Expr, enable_auto_mapping: bool = False) -> int:
+    """Compute structural hash of an expression.
+
+    Ignores source location (Span). Two expressions with identical structure hash to the same value.
+    If enable_auto_mapping=True, variable names are ignored (e.g., x+1 and y+1 hash the same).
+    If enable_auto_mapping=False (default), variable objects must be exactly the same (not just same name).
+
+    Args:
+        expr: Expression to compute hash for
+        enable_auto_mapping: Whether to ignore variable identity and auto-map variables
+
+    Returns:
+        Hash value of the expression structure
+    """
+
+def structural_equal(lhs: Expr, rhs: Expr, enable_auto_mapping: bool = False) -> bool:
+    """Check if two expressions are structurally equal.
+
+    Ignores source location (Span). Returns True if expressions have identical structure.
+    If enable_auto_mapping=True, automatically map variables (e.g., x+1 equals y+1).
+    If enable_auto_mapping=False (default), variable objects must be exactly the same (not just same name).
+
+    Args:
+        lhs: Left-hand side expression
+        rhs: Right-hand side expression
+        enable_auto_mapping: Whether to automatically map variables
+
+    Returns:
+        True if expressions are structurally equal, False otherwise
+    """

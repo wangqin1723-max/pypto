@@ -9,8 +9,8 @@
  * -----------------------------------------------------------------------------------------------------------
  */
 
-#ifndef PYPTO_IR_TRANSFORM_FUNCTOR_H_
-#define PYPTO_IR_TRANSFORM_FUNCTOR_H_
+#ifndef PYPTO_IR_TRANSFORM_BASE_FUNCTOR_H_
+#define PYPTO_IR_TRANSFORM_BASE_FUNCTOR_H_
 
 #include <utility>
 
@@ -136,4 +136,4 @@ R ExprFunctor<R, Args...>::VisitExpr(const ExprPtr& expr, Args... args) {
 }  // namespace ir
 }  // namespace pypto
 
-#endif  // PYPTO_IR_TRANSFORM_FUNCTOR_H_
+#endif  // PYPTO_IR_TRANSFORM_BASE_FUNCTOR_H_

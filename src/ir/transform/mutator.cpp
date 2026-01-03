@@ -9,7 +9,7 @@
  * -----------------------------------------------------------------------------------------------------------
  */
 
-#include "pypto/ir/transform/mutator.h"
+#include "pypto/ir/transform/base/mutator.h"
 
 #include <memory>
 #include <utility>

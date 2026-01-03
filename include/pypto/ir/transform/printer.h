@@ -15,7 +15,7 @@
 #include <sstream>
 #include <string>
 
-#include "pypto/ir/transform/visitor.h"
+#include "pypto/ir/transform/base/visitor.h"
 
 namespace pypto {
 namespace ir {
