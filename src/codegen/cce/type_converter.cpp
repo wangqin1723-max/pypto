@@ -16,55 +16,51 @@
 #include <vector>
 
 #include "pypto/core/logging.h"
+#include "pypto/ir/expr.h"
 
 namespace pypto {
 
 namespace codegen {
 
-std::string TypeConverter::ConvertDataType(const DataType& dtype) const {
-  if (dtype == DataType::FP32) {
-    return "float";
+std::string TypeConverter::ConvertTileType(const ir::TileTypePtr tile_type, int64_t rows,
+                                           int64_t cols) const {
+  std::ostringstream type_alias;
+  if (!tile_type->memref_.has_value()) {
+    type_alias << "Tile<TileType::Vec, " << tile_type->dtype_.ToCTypeString() << ", " << rows << ", " << cols
+               << ", BLayout::RowMajor, -1, -1>;";
+    LOG_ERROR << "TileType has no memref, using default TileType::Vec";
+    return type_alias.str();
   }
-  if (dtype == DataType::FP16) {
-    return "half";
+  ir::MemorySpace space = tile_type->memref_.value()->memory_space_;
+  std::string tile_type_str = ConvertMemorySpaceToTileType(space);
+  type_alias << "Tile<" << tile_type_str << ", " << tile_type->dtype_.ToCTypeString() << ", " << rows << ", "
+             << cols;
+  if (space == ir::MemorySpace::L0C) {
+    type_alias << ", BLayout::ColMajor, -1, -1, SLayout::RowMajor>;";
+  } else {
+    type_alias << ", BLayout::RowMajor, -1, -1>;";
   }
-  if (dtype == DataType::INT32) {
-    return "int32_t";
-  }
-  if (dtype == DataType::INT64) {
-    return "int64_t";
-  }
-  if (dtype == DataType::BOOL) {
-    return "bool";
-  }
-  if (dtype == DataType::BF16) {
-    return "bfloat16";
-  }
-  if (dtype == DataType::UINT32) {
-    return "uint32_t";
-  }
-  if (dtype == DataType::UINT64) {
-    return "uint64_t";
-  }
-
-  // Unsupported type
-  throw pypto::ValueError("Unsupported DataType for code generation: " + dtype.ToString());
+  return type_alias.str();
 }
 
-std::string TypeConverter::ConvertMemorySpace(ir::MemorySpace space) const {
+std::string TypeConverter::ConvertMemorySpaceToTileType(ir::MemorySpace space) const {
   switch (space) {
-    case ir::MemorySpace::DDR:
-      return "__gm__";
-    case ir::MemorySpace::UB:
-    case ir::MemorySpace::L1:
     case ir::MemorySpace::L0A:
+      return "TileType::Left";
     case ir::MemorySpace::L0B:
+      return "TileType::Right";
     case ir::MemorySpace::L0C:
-      // No annotation needed for on-chip memory
-      return "";
+      return "TileType::Acc";
+    case ir::MemorySpace::L1:
+      return "TileType::Mat";
+    case ir::MemorySpace::UB:
+      return "TileType::Vec";
+    case ir::MemorySpace::DDR:
+      // DDR is for GlobalTensor, not Tile - should not reach here
+      throw pypto::ValueError("DDR is for GlobalTensor, not Tile");
+    default:
+      throw pypto::ValueError("Invalid MemorySpace value");
   }
-  // Should never reach here with a valid enum
-  return "";
 }
 
 std::string TypeConverter::ConvertPipeType(ir::PipeType pipe) const {
@@ -85,9 +81,9 @@ std::string TypeConverter::ConvertPipeType(ir::PipeType pipe) const {
       return "PIPE_FIX";
     case ir::PipeType::ALL:
       return "PIPE_ALL";
+    default:
+      throw pypto::ValueError("Invalid PipeType value");
   }
-  // Should never reach here with a valid enum
-  throw pypto::ValueError("Invalid PipeType value");
 }
 
 std::string TypeConverter::ConvertEventId(int event_id) const {

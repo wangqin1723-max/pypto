@@ -18,6 +18,7 @@
 #include "pypto/core/dtype.h"
 #include "pypto/ir/memref.h"
 #include "pypto/ir/pipe.h"
+#include "pypto/ir/type.h"
 
 namespace pypto {
 namespace codegen {
@@ -33,32 +34,31 @@ class TypeConverter {
   TypeConverter() = default;
 
   /**
-   * @brief Convert DataType to C++ type string
+   * @brief Convert TileType to pto-isa TileType string
    *
-   * Maps PyPTO DataType to pto-isa C++ types:
-   * - FP32 → "float"
-   * - FP16 → "half"
-   * - INT32 → "int32_t"
-   * - INT64 → "int64_t"
-   * - BOOL → "bool"
-   *
-   * @param dtype The PyPTO data type
-   * @return C++ type string
+   * @param tile_type The ir::TileTypePtr
+   * @param rows The number of rows
+   * @param cols The number of columns
+   * @return pto-isa Tile declaration string (e.g., "Tile<TileType::Left, float, 1, 1, BLayout::RowMajor, -1,
+   * -1>;")
    */
-  [[nodiscard]] std::string ConvertDataType(const DataType& dtype) const;
+  [[nodiscard]] std::string ConvertTileType(const ir::TileTypePtr tile_type, int64_t rows,
+                                            int64_t cols) const;
 
   /**
-   * @brief Convert MemorySpace to C++ memory space annotation
+   * @brief Convert MemorySpace to pto-isa TileType string
    *
-   * Maps PyPTO MemorySpace to pto-isa annotations:
-   * - DDR → "__gm__"
-   * - UB → "" (no annotation needed for local tiles)
-   * - L0A/L0B/L0C → "" (no annotation needed)
+   * Maps PyPTO MemorySpace to pto-isa TileType enum values:
+   * - L0A → "TileType::Left"
+   * - L0B → "TileType::Right"
+   * - L0C → "TileType::Acc"
+   * - L1 → "TileType::Mat"
+   * - UB → "TileType::Vec"
    *
    * @param space The memory space
-   * @return C++ memory space annotation (empty string if none needed)
+   * @return TileType string (e.g., "TileType::Left", "TileType::Vec")
    */
-  [[nodiscard]] std::string ConvertMemorySpace(ir::MemorySpace space) const;
+  [[nodiscard]] std::string ConvertMemorySpaceToTileType(ir::MemorySpace space) const;
 
   /**
    * @brief Convert PipeType to pto-isa pipe type string
