@@ -590,9 +590,17 @@ REGISTER_BACKEND_OP(Backend910B_CCE, "block.full")
 static std::string MakeBlockRowReductionCodegenCCE(const std::string& op_prefix, const ir::CallPtr& op,
                                                    codegen::CodegenBase& codegen_base) {
   auto& codegen = dynamic_cast<codegen::CCECodegen&>(codegen_base);
-  CHECK(op->args_.size() == 2) << "TROW" << op_prefix << " requires 2 arguments";
+  // TROWSUM: accepts 1 arg (block.sum axis=1, tmp reuses src) or 2 args (block.row_sum with explicit tmp).
+  // TROWMAX/TROWMIN: always require 2 args (src, explicit tmp); no implicit tmp fallback.
+  if (op_prefix == "SUM") {
+    CHECK(op->args_.size() == 1 || op->args_.size() == 2)
+        << "TROWSUM requires 1 or 2 arguments, got " << op->args_.size();
+  } else {
+    CHECK(op->args_.size() == 2)
+        << "TROW" << op_prefix << " requires 2 arguments (src, tmp), got " << op->args_.size();
+  }
   std::string tile = codegen.GetExprAsCode(op->args_[0]);
-  std::string tmp_tile = codegen.GetExprAsCode(op->args_[1]);
+  std::string tmp_tile = (op->args_.size() == 2) ? codegen.GetExprAsCode(op->args_[1]) : tile;
   std::string result = codegen.GetCurrentResultTarget();
 
   codegen.Emit("TROW" + op_prefix + "(" + result + ", " + tile + ", " + tmp_tile + ");");

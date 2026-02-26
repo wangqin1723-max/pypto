@@ -11,8 +11,10 @@
 Runtime tests for tile-based reduction operations using the PyPTO frontend.
 
 Covers:
-  - block.row_sum, block.row_max, block.row_min — row-wise reductions
   - block.sum, block.max, block.min — axis-based reductions (CCE-only)
+    - axis=0: column-wise (col_sum / col_max / col_min)
+    - axis=1: row-wise (row_sum / row_max / row_min)
+  - block.row_max, block.row_min — row-wise reductions (explicit tmp tile)
 """
 
 from typing import Any
@@ -24,12 +26,12 @@ from harness.core.harness import DataType, PTOTestCase, TensorSpec
 
 
 # =============================================================================
-# block.row_sum
+# block.sum (axis=1, row-wise)
 # =============================================================================
 
 
 class TestTileRowSum(PTOTestCase):
-    """Test block.row_sum: [64, 64] -> [64, 1]."""
+    """Test block.sum axis=1: [64, 64] -> [64, 1]."""
 
     __test__ = False
 
@@ -52,8 +54,7 @@ class TestTileRowSum(PTOTestCase):
                 c: pl.Tensor[[64, 1], pl.FP32],
             ) -> pl.Tensor[[64, 1], pl.FP32]:
                 tile_a = pl.load(a, offsets=[0, 0], shapes=[64, 64])
-                tmp = pl.create_tile([64, 1], dtype=pl.FP32, target_memory=pl.MemorySpace.UB)
-                tile_c = pl.row_sum(tile_a, tmp)
+                tile_c = pl.sum(tile_a, axis=1, keepdim=True)
                 out_c = pl.store(tile_c, offsets=[0, 0], shapes=[64, 1], output_tensor=c)
                 return out_c
 
@@ -71,7 +72,7 @@ class TestTileRowSum(PTOTestCase):
 
 
 class TestTileRowSum16x64(PTOTestCase):
-    """Test block.row_sum: [16, 64] -> [16, 1]."""
+    """Test block.sum axis=1: [16, 64] -> [16, 1]."""
 
     __test__ = False
 
@@ -94,8 +95,7 @@ class TestTileRowSum16x64(PTOTestCase):
                 c: pl.Tensor[[16, 1], pl.FP32],
             ) -> pl.Tensor[[16, 1], pl.FP32]:
                 tile_a = pl.load(a, offsets=[0, 0], shapes=[16, 64])
-                tmp = pl.create_tile([16, 1], dtype=pl.FP32, target_memory=pl.MemorySpace.UB)
-                tile_c = pl.row_sum(tile_a, tmp)
+                tile_c = pl.sum(tile_a, axis=1, keepdim=True)
                 out_c = pl.store(tile_c, offsets=[0, 0], shapes=[16, 1], output_tensor=c)
                 return out_c
 
@@ -296,7 +296,7 @@ class TestTileRowMin16x64(PTOTestCase):
 
 
 class TestRowSumOperations:
-    """Test suite for block.row_sum."""
+    """Test suite for block.sum axis=1 (row-wise)."""
 
     def test_tile_row_sum_64x64(self, test_runner):
         """Test block.row_sum (64x64)."""
