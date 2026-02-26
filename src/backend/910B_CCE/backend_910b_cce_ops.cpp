@@ -606,7 +606,12 @@ static std::string MakeBlockColReductionCodegenCCE(const std::string& op_prefix,
   std::string tile = codegen.GetExprAsCode(op->args_[0]);
   std::string result = codegen.GetCurrentResultTarget();
 
-  codegen.Emit("TCOL" + op_prefix + "(" + result + ", " + tile + ");");
+  // TCOLSUM requires a tmp tile and isBinary flag; TCOLMAX/TCOLMIN use 2-arg form.
+  if (op_prefix == "SUM") {
+    codegen.Emit("TCOLSUM(" + result + ", " + tile + ", " + tile + ", false);");
+  } else {
+    codegen.Emit("TCOL" + op_prefix + "(" + result + ", " + tile + ");");
+  }
   return "";
 }
 
