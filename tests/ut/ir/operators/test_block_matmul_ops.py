@@ -13,6 +13,7 @@
 import pypto.language as pl
 from pypto import DataType, ir
 
+
 class TestBlockMatMulOps:
     """Test suite for block-level matrix multiplication operators."""
 
@@ -152,6 +153,7 @@ class TestBlockMatMulOps:
 
         ir_str = str(Program)
         assert "block.gemv_bias" in ir_str
+
 
 class TestBlockBatchMatMulOps:
     """Tests for block batch matrix multiplication operations."""

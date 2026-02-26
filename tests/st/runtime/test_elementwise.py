@@ -57,10 +57,10 @@ class TestTileAdd(PTOTestCase):
                 b: pl.Tensor[[128, 128], pl.FP32],
                 c: pl.Tensor[[128, 128], pl.FP32],
             ) -> pl.Tensor[[128, 128], pl.FP32]:
-                tile_a = pl.block.load(a, offsets=[0, 0], shapes=[128, 128])
-                tile_b = pl.block.load(b, offsets=[0, 0], shapes=[128, 128])
-                tile_c = pl.block.add(tile_a, tile_b)
-                out_c = pl.block.store(tile_c, offsets=[0, 0], shapes=[128, 128], output_tensor=c)
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[128, 128])
+                tile_b = pl.load(b, offsets=[0, 0], shapes=[128, 128])
+                tile_c = pl.add(tile_a, tile_b)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[128, 128], output_tensor=c)
                 return out_c
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -76,19 +76,19 @@ class TestTileAdd(PTOTestCase):
         tensors["c"][:] = tensors["a"] + tensors["b"]
 
 
-class TestTileAdd64x64(PTOTestCase):
-    """Test tile addition with 64x64 shape."""
+class TestTileAdd32x128(PTOTestCase):
+    """Test tile addition with 32x128 shape."""
 
     __test__ = False  # Not a pytest test class
 
     def get_name(self) -> str:
-        return "tile_add_64x64"
+        return "tile_add_32x128"
 
     def define_tensors(self) -> list[TensorSpec]:
         return [
-            TensorSpec("a", [64, 64], DataType.FP32, init_value=2.0),
-            TensorSpec("b", [64, 64], DataType.FP32, init_value=3.0),
-            TensorSpec("c", [64, 64], DataType.FP32, is_output=True),
+            TensorSpec("a", [32, 128], DataType.FP32, init_value=2.0),
+            TensorSpec("b", [32, 128], DataType.FP32, init_value=3.0),
+            TensorSpec("c", [32, 128], DataType.FP32, is_output=True),
         ]
 
     def get_program(self) -> Any:
@@ -97,20 +97,20 @@ class TestTileAdd64x64(PTOTestCase):
             @pl.function
             def tile_add(
                 self,
-                a: pl.Tensor[[64, 64], pl.FP32],
-                b: pl.Tensor[[64, 64], pl.FP32],
-                c: pl.Tensor[[64, 64], pl.FP32],
-            ) -> pl.Tensor[[64, 64], pl.FP32]:
-                tile_a = pl.block.load(a, offsets=[0, 0], shapes=[64, 64])
-                tile_b = pl.block.load(b, offsets=[0, 0], shapes=[64, 64])
-                tile_c = pl.block.add(tile_a, tile_b)
-                out_c = pl.block.store(tile_c, offsets=[0, 0], shapes=[64, 64], output_tensor=c)
+                a: pl.Tensor[[32, 128], pl.FP32],
+                b: pl.Tensor[[32, 128], pl.FP32],
+                c: pl.Tensor[[32, 128], pl.FP32],
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 128])
+                tile_b = pl.load(b, offsets=[0, 0], shapes=[32, 128])
+                tile_c = pl.add(tile_a, tile_b)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[32, 128], output_tensor=c)
                 return out_c
 
             @pl.function(type=pl.FunctionType.Orchestration)
             def orchestrator(
-                self, a: pl.Tensor[[64, 64], pl.FP32], b: pl.Tensor[[64, 64], pl.FP32]
-            ) -> pl.Tensor[[64, 64], pl.FP32]:
+                self, a: pl.Tensor[[32, 128], pl.FP32], b: pl.Tensor[[32, 128], pl.FP32]
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
                 out_c = self.tile_add(a, b)
                 return out_c
 
@@ -157,10 +157,10 @@ class TestTileMul(PTOTestCase):
                 b: pl.Tensor[[128, 128], pl.FP32],
                 c: pl.Tensor[[128, 128], pl.FP32],
             ) -> pl.Tensor[[128, 128], pl.FP32]:
-                tile_a = pl.block.load(a, offsets=[0, 0], shapes=[128, 128])
-                tile_b = pl.block.load(b, offsets=[0, 0], shapes=[128, 128])
-                tile_c = pl.block.mul(tile_a, tile_b)
-                out_c = pl.block.store(tile_c, offsets=[0, 0], shapes=[128, 128], output_tensor=c)
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[128, 128])
+                tile_b = pl.load(b, offsets=[0, 0], shapes=[128, 128])
+                tile_c = pl.mul(tile_a, tile_b)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[128, 128], output_tensor=c)
                 return out_c
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -176,24 +176,24 @@ class TestTileMul(PTOTestCase):
         tensors["c"][:] = tensors["a"] * tensors["b"]
 
 
-class TestTileMul64x64(PTOTestCase):
-    """Test tile multiplication with 64x64 shape."""
+class TestTileMul32x128(PTOTestCase):
+    """Test tile multiplication with 32x128 shape."""
 
     __test__ = False  # Not a pytest test class
 
     def get_name(self) -> str:
-        return "tile_mul_64x64"
+        return "tile_mul_32x128"
 
     def define_tensors(self) -> list[TensorSpec]:
         return [
             TensorSpec(
                 "a",
-                [64, 64],
+                [32, 128],
                 DataType.FP32,
                 init_value=torch.randn,
             ),
-            TensorSpec("b", [64, 64], DataType.FP32, init_value=3.0),
-            TensorSpec("c", [64, 64], DataType.FP32, is_output=True),
+            TensorSpec("b", [32, 128], DataType.FP32, init_value=3.0),
+            TensorSpec("c", [32, 128], DataType.FP32, is_output=True),
         ]
 
     def get_program(self) -> Any:
@@ -202,20 +202,20 @@ class TestTileMul64x64(PTOTestCase):
             @pl.function
             def tile_mul(
                 self,
-                a: pl.Tensor[[64, 64], pl.FP32],
-                b: pl.Tensor[[64, 64], pl.FP32],
-                c: pl.Tensor[[64, 64], pl.FP32],
-            ) -> pl.Tensor[[64, 64], pl.FP32]:
-                tile_a = pl.block.load(a, offsets=[0, 0], shapes=[64, 64])
-                tile_b = pl.block.load(b, offsets=[0, 0], shapes=[64, 64])
-                tile_c = pl.block.mul(tile_a, tile_b)
-                out_c = pl.block.store(tile_c, offsets=[0, 0], shapes=[64, 64], output_tensor=c)
+                a: pl.Tensor[[32, 128], pl.FP32],
+                b: pl.Tensor[[32, 128], pl.FP32],
+                c: pl.Tensor[[32, 128], pl.FP32],
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 128])
+                tile_b = pl.load(b, offsets=[0, 0], shapes=[32, 128])
+                tile_c = pl.mul(tile_a, tile_b)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[32, 128], output_tensor=c)
                 return out_c
 
             @pl.function(type=pl.FunctionType.Orchestration)
             def orchestrator(
-                self, a: pl.Tensor[[64, 64], pl.FP32], b: pl.Tensor[[64, 64], pl.FP32]
-            ) -> pl.Tensor[[64, 64], pl.FP32]:
+                self, a: pl.Tensor[[32, 128], pl.FP32], b: pl.Tensor[[32, 128], pl.FP32]
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
                 out_c = self.tile_mul(a, b)
                 return out_c
 
@@ -238,6 +238,840 @@ class TestTileAddWithPTOAS(TestTileAdd):
 
     def get_name(self) -> str:
         return "tile_add_ptoas_128x128"
+
+
+class TestTileSub(PTOTestCase):
+    """Test case for tile element-wise subtraction (128x128)."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_sub_128x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [128, 128], DataType.FP32, init_value=5.0),
+            TensorSpec("b", [128, 128], DataType.FP32, init_value=2.0),
+            TensorSpec("c", [128, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileSubProgram:
+            @pl.function
+            def tile_sub(
+                self,
+                a: pl.Tensor[[128, 128], pl.FP32],
+                b: pl.Tensor[[128, 128], pl.FP32],
+                c: pl.Tensor[[128, 128], pl.FP32],
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[128, 128])
+                tile_b = pl.load(b, offsets=[0, 0], shapes=[128, 128])
+                tile_c = pl.sub(tile_a, tile_b)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[128, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(
+                self, a: pl.Tensor[[128, 128], pl.FP32], b: pl.Tensor[[128, 128], pl.FP32]
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                out_c = self.tile_sub(a, b)
+                return out_c
+
+        return TileSubProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = tensors["a"] - tensors["b"]
+
+
+class TestTileSub32x128(PTOTestCase):
+    """Test tile subtraction with 32x128 shape."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_sub_32x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [32, 128], DataType.FP32, init_value=5.0),
+            TensorSpec("b", [32, 128], DataType.FP32, init_value=2.0),
+            TensorSpec("c", [32, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileSubProgram:
+            @pl.function
+            def tile_sub(
+                self,
+                a: pl.Tensor[[32, 128], pl.FP32],
+                b: pl.Tensor[[32, 128], pl.FP32],
+                c: pl.Tensor[[32, 128], pl.FP32],
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 128])
+                tile_b = pl.load(b, offsets=[0, 0], shapes=[32, 128])
+                tile_c = pl.sub(tile_a, tile_b)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[32, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(
+                self, a: pl.Tensor[[32, 128], pl.FP32], b: pl.Tensor[[32, 128], pl.FP32]
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                out_c = self.tile_sub(a, b)
+                return out_c
+
+        return TileSubProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = tensors["a"] - tensors["b"]
+
+
+class TestTileDiv(PTOTestCase):
+    """Test case for tile element-wise division (128x128)."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_div_128x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [128, 128], DataType.FP32, init_value=6.0),
+            TensorSpec("b", [128, 128], DataType.FP32, init_value=2.0),
+            TensorSpec("c", [128, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileDivProgram:
+            @pl.function
+            def tile_div(
+                self,
+                a: pl.Tensor[[128, 128], pl.FP32],
+                b: pl.Tensor[[128, 128], pl.FP32],
+                c: pl.Tensor[[128, 128], pl.FP32],
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[128, 128])
+                tile_b = pl.load(b, offsets=[0, 0], shapes=[128, 128])
+                tile_c = pl.div(tile_a, tile_b)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[128, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(
+                self, a: pl.Tensor[[128, 128], pl.FP32], b: pl.Tensor[[128, 128], pl.FP32]
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                out_c = self.tile_div(a, b)
+                return out_c
+
+        return TileDivProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = tensors["a"] / tensors["b"]
+
+
+class TestTileDiv32x128(PTOTestCase):
+    """Test tile division with 32x128 shape."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_div_32x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [32, 128], DataType.FP32, init_value=6.0),
+            TensorSpec("b", [32, 128], DataType.FP32, init_value=2.0),
+            TensorSpec("c", [32, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileDivProgram:
+            @pl.function
+            def tile_div(
+                self,
+                a: pl.Tensor[[32, 128], pl.FP32],
+                b: pl.Tensor[[32, 128], pl.FP32],
+                c: pl.Tensor[[32, 128], pl.FP32],
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 128])
+                tile_b = pl.load(b, offsets=[0, 0], shapes=[32, 128])
+                tile_c = pl.div(tile_a, tile_b)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[32, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(
+                self, a: pl.Tensor[[32, 128], pl.FP32], b: pl.Tensor[[32, 128], pl.FP32]
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                out_c = self.tile_div(a, b)
+                return out_c
+
+        return TileDivProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = tensors["a"] / tensors["b"]
+
+
+class TestTileMaximum(PTOTestCase):
+    """Test case for tile element-wise maximum (128x128)."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_maximum_128x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [128, 128], DataType.FP32, init_value=torch.randn),
+            TensorSpec("b", [128, 128], DataType.FP32, init_value=torch.randn),
+            TensorSpec("c", [128, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileMaximumProgram:
+            @pl.function
+            def tile_maximum(
+                self,
+                a: pl.Tensor[[128, 128], pl.FP32],
+                b: pl.Tensor[[128, 128], pl.FP32],
+                c: pl.Tensor[[128, 128], pl.FP32],
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[128, 128])
+                tile_b = pl.load(b, offsets=[0, 0], shapes=[128, 128])
+                tile_c = pl.maximum(tile_a, tile_b)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[128, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(
+                self, a: pl.Tensor[[128, 128], pl.FP32], b: pl.Tensor[[128, 128], pl.FP32]
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                out_c = self.tile_maximum(a, b)
+                return out_c
+
+        return TileMaximumProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = torch.maximum(tensors["a"], tensors["b"])
+
+
+class TestTileMaximum32x128(PTOTestCase):
+    """Test tile maximum with 32x128 shape."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_maximum_32x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [32, 128], DataType.FP32, init_value=torch.randn),
+            TensorSpec("b", [32, 128], DataType.FP32, init_value=torch.randn),
+            TensorSpec("c", [32, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileMaximumProgram:
+            @pl.function
+            def tile_maximum(
+                self,
+                a: pl.Tensor[[32, 128], pl.FP32],
+                b: pl.Tensor[[32, 128], pl.FP32],
+                c: pl.Tensor[[32, 128], pl.FP32],
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 128])
+                tile_b = pl.load(b, offsets=[0, 0], shapes=[32, 128])
+                tile_c = pl.maximum(tile_a, tile_b)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[32, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(
+                self, a: pl.Tensor[[32, 128], pl.FP32], b: pl.Tensor[[32, 128], pl.FP32]
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                out_c = self.tile_maximum(a, b)
+                return out_c
+
+        return TileMaximumProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = torch.maximum(tensors["a"], tensors["b"])
+
+
+class TestTileMinimum(PTOTestCase):
+    """Test case for tile element-wise minimum (128x128)."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_minimum_128x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [128, 128], DataType.FP32, init_value=torch.randn),
+            TensorSpec("b", [128, 128], DataType.FP32, init_value=torch.randn),
+            TensorSpec("c", [128, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileMinimumProgram:
+            @pl.function
+            def tile_minimum(
+                self,
+                a: pl.Tensor[[128, 128], pl.FP32],
+                b: pl.Tensor[[128, 128], pl.FP32],
+                c: pl.Tensor[[128, 128], pl.FP32],
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[128, 128])
+                tile_b = pl.load(b, offsets=[0, 0], shapes=[128, 128])
+                tile_c = pl.minimum(tile_a, tile_b)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[128, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(
+                self, a: pl.Tensor[[128, 128], pl.FP32], b: pl.Tensor[[128, 128], pl.FP32]
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                out_c = self.tile_minimum(a, b)
+                return out_c
+
+        return TileMinimumProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = torch.minimum(tensors["a"], tensors["b"])
+
+
+class TestTileMinimum32x128(PTOTestCase):
+    """Test tile minimum with 32x128 shape."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_minimum_32x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [32, 128], DataType.FP32, init_value=torch.randn),
+            TensorSpec("b", [32, 128], DataType.FP32, init_value=torch.randn),
+            TensorSpec("c", [32, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileMinimumProgram:
+            @pl.function
+            def tile_minimum(
+                self,
+                a: pl.Tensor[[32, 128], pl.FP32],
+                b: pl.Tensor[[32, 128], pl.FP32],
+                c: pl.Tensor[[32, 128], pl.FP32],
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 128])
+                tile_b = pl.load(b, offsets=[0, 0], shapes=[32, 128])
+                tile_c = pl.minimum(tile_a, tile_b)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[32, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(
+                self, a: pl.Tensor[[32, 128], pl.FP32], b: pl.Tensor[[32, 128], pl.FP32]
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                out_c = self.tile_minimum(a, b)
+                return out_c
+
+        return TileMinimumProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = torch.minimum(tensors["a"], tensors["b"])
+
+
+class TestTileAdds(PTOTestCase):
+    """Test case for tile-scalar addition (128x128)."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_adds_128x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [128, 128], DataType.FP32, init_value=3.0),
+            TensorSpec("c", [128, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileAddsProgram:
+            @pl.function
+            def tile_adds(
+                self,
+                a: pl.Tensor[[128, 128], pl.FP32],
+                c: pl.Tensor[[128, 128], pl.FP32],
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[128, 128])
+                tile_c = pl.adds(tile_a, 2.0)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[128, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(self, a: pl.Tensor[[128, 128], pl.FP32]) -> pl.Tensor[[128, 128], pl.FP32]:
+                out_c = self.tile_adds(a)
+                return out_c
+
+        return TileAddsProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = tensors["a"] + 2.0
+
+
+class TestTileAdds32x128(PTOTestCase):
+    """Test tile-scalar addition with 32x128 shape."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_adds_32x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [32, 128], DataType.FP32, init_value=3.0),
+            TensorSpec("c", [32, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileAddsProgram:
+            @pl.function
+            def tile_adds(
+                self,
+                a: pl.Tensor[[32, 128], pl.FP32],
+                c: pl.Tensor[[32, 128], pl.FP32],
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 128])
+                tile_c = pl.adds(tile_a, 2.0)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[32, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(self, a: pl.Tensor[[32, 128], pl.FP32]) -> pl.Tensor[[32, 128], pl.FP32]:
+                out_c = self.tile_adds(a)
+                return out_c
+
+        return TileAddsProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = tensors["a"] + 2.0
+
+
+class TestTileSubs(PTOTestCase):
+    """Test case for tile-scalar subtraction (128x128)."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_subs_128x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [128, 128], DataType.FP32, init_value=5.0),
+            TensorSpec("c", [128, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileSubsProgram:
+            @pl.function
+            def tile_subs(
+                self,
+                a: pl.Tensor[[128, 128], pl.FP32],
+                c: pl.Tensor[[128, 128], pl.FP32],
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[128, 128])
+                tile_c = pl.subs(tile_a, 2.0)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[128, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(self, a: pl.Tensor[[128, 128], pl.FP32]) -> pl.Tensor[[128, 128], pl.FP32]:
+                out_c = self.tile_subs(a)
+                return out_c
+
+        return TileSubsProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = tensors["a"] - 2.0
+
+
+class TestTileSubs32x128(PTOTestCase):
+    """Test tile-scalar subtraction with 32x128 shape."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_subs_32x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [32, 128], DataType.FP32, init_value=5.0),
+            TensorSpec("c", [32, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileSubsProgram:
+            @pl.function
+            def tile_subs(
+                self,
+                a: pl.Tensor[[32, 128], pl.FP32],
+                c: pl.Tensor[[32, 128], pl.FP32],
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 128])
+                tile_c = pl.subs(tile_a, 2.0)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[32, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(self, a: pl.Tensor[[32, 128], pl.FP32]) -> pl.Tensor[[32, 128], pl.FP32]:
+                out_c = self.tile_subs(a)
+                return out_c
+
+        return TileSubsProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = tensors["a"] - 2.0
+
+
+class TestTileMuls(PTOTestCase):
+    """Test case for tile-scalar multiplication (128x128)."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_muls_128x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [128, 128], DataType.FP32, init_value=3.0),
+            TensorSpec("c", [128, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileMulsProgram:
+            @pl.function
+            def tile_muls(
+                self,
+                a: pl.Tensor[[128, 128], pl.FP32],
+                c: pl.Tensor[[128, 128], pl.FP32],
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[128, 128])
+                tile_c = pl.muls(tile_a, 2.0)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[128, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(self, a: pl.Tensor[[128, 128], pl.FP32]) -> pl.Tensor[[128, 128], pl.FP32]:
+                out_c = self.tile_muls(a)
+                return out_c
+
+        return TileMulsProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = tensors["a"] * 2.0
+
+
+class TestTileMuls32x128(PTOTestCase):
+    """Test tile-scalar multiplication with 32x128 shape."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_muls_32x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [32, 128], DataType.FP32, init_value=3.0),
+            TensorSpec("c", [32, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileMulsProgram:
+            @pl.function
+            def tile_muls(
+                self,
+                a: pl.Tensor[[32, 128], pl.FP32],
+                c: pl.Tensor[[32, 128], pl.FP32],
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 128])
+                tile_c = pl.muls(tile_a, 2.0)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[32, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(self, a: pl.Tensor[[32, 128], pl.FP32]) -> pl.Tensor[[32, 128], pl.FP32]:
+                out_c = self.tile_muls(a)
+                return out_c
+
+        return TileMulsProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = tensors["a"] * 2.0
+
+
+class TestTileDivs(PTOTestCase):
+    """Test case for tile-scalar division (128x128)."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_divs_128x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [128, 128], DataType.FP32, init_value=6.0),
+            TensorSpec("c", [128, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileDivsProgram:
+            @pl.function
+            def tile_divs(
+                self,
+                a: pl.Tensor[[128, 128], pl.FP32],
+                c: pl.Tensor[[128, 128], pl.FP32],
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[128, 128])
+                tile_c = pl.divs(tile_a, 2.0)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[128, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(self, a: pl.Tensor[[128, 128], pl.FP32]) -> pl.Tensor[[128, 128], pl.FP32]:
+                out_c = self.tile_divs(a)
+                return out_c
+
+        return TileDivsProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = tensors["a"] / 2.0
+
+
+class TestTileDivs32x128(PTOTestCase):
+    """Test tile-scalar division with 32x128 shape."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_divs_32x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [32, 128], DataType.FP32, init_value=6.0),
+            TensorSpec("c", [32, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileDivsProgram:
+            @pl.function
+            def tile_divs(
+                self,
+                a: pl.Tensor[[32, 128], pl.FP32],
+                c: pl.Tensor[[32, 128], pl.FP32],
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 128])
+                tile_c = pl.divs(tile_a, 2.0)
+                out_c = pl.store(tile_c, offsets=[0, 0], shapes=[32, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(self, a: pl.Tensor[[32, 128], pl.FP32]) -> pl.Tensor[[32, 128], pl.FP32]:
+                out_c = self.tile_divs(a)
+                return out_c
+
+        return TileDivsProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = tensors["a"] / 2.0
+
+
+class TestTileCmp(PTOTestCase):
+    """Test case for tile element-wise comparison, GT mode (128x128)."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_cmp_128x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [128, 128], DataType.FP32, init_value=torch.randn),
+            TensorSpec("b", [128, 128], DataType.FP32, init_value=torch.randn),
+            TensorSpec("c", [128, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileCmpProgram:
+            @pl.function
+            def tile_cmp(
+                self,
+                a: pl.Tensor[[128, 128], pl.FP32],
+                b: pl.Tensor[[128, 128], pl.FP32],
+                c: pl.Tensor[[128, 128], pl.FP32],
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[128, 128])
+                tile_b = pl.load(b, offsets=[0, 0], shapes=[128, 128])
+                tile_c = pl.cmp(tile_a, tile_b, cmp_type=4)
+                tile_c_fp32 = pl.cast(tile_c, target_type=pl.FP32)
+                out_c = pl.store(tile_c_fp32, offsets=[0, 0], shapes=[128, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(
+                self, a: pl.Tensor[[128, 128], pl.FP32], b: pl.Tensor[[128, 128], pl.FP32]
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                out_c = self.tile_cmp(a, b)
+                return out_c
+
+        return TileCmpProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = (tensors["a"] > tensors["b"]).to(torch.float32)
+
+
+class TestTileCmp32x128(PTOTestCase):
+    """Test tile comparison with 32x128 shape, GT mode."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_cmp_32x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [32, 128], DataType.FP32, init_value=torch.randn),
+            TensorSpec("b", [32, 128], DataType.FP32, init_value=torch.randn),
+            TensorSpec("c", [32, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileCmpProgram:
+            @pl.function
+            def tile_cmp(
+                self,
+                a: pl.Tensor[[32, 128], pl.FP32],
+                b: pl.Tensor[[32, 128], pl.FP32],
+                c: pl.Tensor[[32, 128], pl.FP32],
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 128])
+                tile_b = pl.load(b, offsets=[0, 0], shapes=[32, 128])
+                tile_c = pl.cmp(tile_a, tile_b, cmp_type=4)
+                tile_c_fp32 = pl.cast(tile_c, target_type=pl.FP32)
+                out_c = pl.store(tile_c_fp32, offsets=[0, 0], shapes=[32, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(
+                self, a: pl.Tensor[[32, 128], pl.FP32], b: pl.Tensor[[32, 128], pl.FP32]
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                out_c = self.tile_cmp(a, b)
+                return out_c
+
+        return TileCmpProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = (tensors["a"] > tensors["b"]).to(torch.float32)
+
+
+class TestTileCmps(PTOTestCase):
+    """Test case for tile-scalar comparison, GT mode (128x128)."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_cmps_128x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [128, 128], DataType.FP32, init_value=torch.randn),
+            TensorSpec("c", [128, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileCmpsProgram:
+            @pl.function
+            def tile_cmps(
+                self,
+                a: pl.Tensor[[128, 128], pl.FP32],
+                c: pl.Tensor[[128, 128], pl.FP32],
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[128, 128])
+                tile_c = pl.cmps(tile_a, 0.0, cmp_type=4)
+                tile_c_fp32 = pl.cast(tile_c, target_type=pl.FP32)
+                out_c = pl.store(tile_c_fp32, offsets=[0, 0], shapes=[128, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(self, a: pl.Tensor[[128, 128], pl.FP32]) -> pl.Tensor[[128, 128], pl.FP32]:
+                out_c = self.tile_cmps(a)
+                return out_c
+
+        return TileCmpsProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = (tensors["a"] > 0.0).to(torch.float32)
+
+
+class TestTileCmps32x128(PTOTestCase):
+    """Test tile-scalar comparison with 32x128 shape, GT mode."""
+
+    __test__ = False  # Not a pytest test class
+
+    def get_name(self) -> str:
+        return "tile_cmps_32x128"
+
+    def define_tensors(self) -> list[TensorSpec]:
+        return [
+            TensorSpec("a", [32, 128], DataType.FP32, init_value=torch.randn),
+            TensorSpec("c", [32, 128], DataType.FP32, is_output=True),
+        ]
+
+    def get_program(self) -> Any:
+        @pl.program
+        class TileCmpsProgram:
+            @pl.function
+            def tile_cmps(
+                self,
+                a: pl.Tensor[[32, 128], pl.FP32],
+                c: pl.Tensor[[32, 128], pl.FP32],
+            ) -> pl.Tensor[[32, 128], pl.FP32]:
+                tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 128])
+                tile_c = pl.cmps(tile_a, 0.0, cmp_type=4)
+                tile_c_fp32 = pl.cast(tile_c, target_type=pl.FP32)
+                out_c = pl.store(tile_c_fp32, offsets=[0, 0], shapes=[32, 128], output_tensor=c)
+                return out_c
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def orchestrator(self, a: pl.Tensor[[32, 128], pl.FP32]) -> pl.Tensor[[32, 128], pl.FP32]:
+                out_c = self.tile_cmps(a)
+                return out_c
+
+        return TileCmpsProgram
+
+    def compute_expected(self, tensors, params=None):
+        tensors["c"][:] = (tensors["a"] > 0.0).to(torch.float32)
 
 
 class TestCustomArrayInit(PTOTestCase):
@@ -289,11 +1123,11 @@ class TestCustomArrayInit(PTOTestCase):
 class TestElementwiseOperations:
     """Test suite for elementwise operations."""
 
-    def test_tile_add_64x64(self, test_runner):
-        """Test tile addition with 64x64 shape."""
-        test_case = TestTileAdd64x64()
+    def test_tile_add_32x128(self, test_runner):
+        """Test tile addition with 32x128 shape."""
+        test_case = TestTileAdd32x128()
         result = test_runner.run(test_case)
-        assert result.passed, f"Test failed for 64x64: {result.error}"
+        assert result.passed, f"Test failed for 32x128: {result.error}"
 
     def test_tile_add_128x128(self, test_runner):
         """Test tile addition with 128x128 shape."""
@@ -301,17 +1135,113 @@ class TestElementwiseOperations:
         result = test_runner.run(test_case)
         assert result.passed, f"Test failed for 128x128: {result.error}"
 
-    def test_tile_mul_64x64(self, test_runner):
-        """Test tile multiplication with 64x64 shape."""
-        test_case = TestTileMul64x64()
+    def test_tile_mul_32x128(self, test_runner):
+        """Test tile multiplication with 32x128 shape."""
+        test_case = TestTileMul32x128()
         result = test_runner.run(test_case)
-        assert result.passed, f"Test failed for 64x64: {result.error}"
+        assert result.passed, f"Test failed for 32x128: {result.error}"
 
     def test_tile_mul_128x128(self, test_runner):
         """Test tile multiplication with 128x128 shape."""
         test_case = TestTileMul()
         result = test_runner.run(test_case)
         assert result.passed, f"Test failed for 128x128: {result.error}"
+
+    def test_tile_sub_128x128(self, test_runner):
+        """Test tile subtraction with 128x128 shape."""
+        test_case = TestTileSub()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 128x128: {result.error}"
+
+    def test_tile_sub_32x128(self, test_runner):
+        """Test tile subtraction with 32x128 shape."""
+        test_case = TestTileSub32x128()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 32x128: {result.error}"
+
+    def test_tile_div_128x128(self, test_runner):
+        """Test tile division with 128x128 shape."""
+        test_case = TestTileDiv()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 128x128: {result.error}"
+
+    def test_tile_div_32x128(self, test_runner):
+        """Test tile division with 32x128 shape."""
+        test_case = TestTileDiv32x128()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 32x128: {result.error}"
+
+    def test_tile_maximum_128x128(self, test_runner):
+        """Test tile element-wise maximum with 128x128 shape."""
+        test_case = TestTileMaximum()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 128x128: {result.error}"
+
+    def test_tile_maximum_32x128(self, test_runner):
+        """Test tile element-wise maximum with 32x128 shape."""
+        test_case = TestTileMaximum32x128()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 32x128: {result.error}"
+
+    def test_tile_minimum_128x128(self, test_runner):
+        """Test tile element-wise minimum with 128x128 shape."""
+        test_case = TestTileMinimum()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 128x128: {result.error}"
+
+    def test_tile_minimum_32x128(self, test_runner):
+        """Test tile element-wise minimum with 32x128 shape."""
+        test_case = TestTileMinimum32x128()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 32x128: {result.error}"
+
+    def test_tile_adds_128x128(self, test_runner):
+        """Test tile-scalar addition with 128x128 shape."""
+        test_case = TestTileAdds()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 128x128: {result.error}"
+
+    def test_tile_adds_32x128(self, test_runner):
+        """Test tile-scalar addition with 32x128 shape."""
+        test_case = TestTileAdds32x128()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 32x128: {result.error}"
+
+    def test_tile_subs_128x128(self, test_runner):
+        """Test tile-scalar subtraction with 128x128 shape."""
+        test_case = TestTileSubs()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 128x128: {result.error}"
+
+    def test_tile_subs_32x128(self, test_runner):
+        """Test tile-scalar subtraction with 32x128 shape."""
+        test_case = TestTileSubs32x128()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 32x128: {result.error}"
+
+    def test_tile_muls_128x128(self, test_runner):
+        """Test tile-scalar multiplication with 128x128 shape."""
+        test_case = TestTileMuls()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 128x128: {result.error}"
+
+    def test_tile_muls_32x128(self, test_runner):
+        """Test tile-scalar multiplication with 32x128 shape."""
+        test_case = TestTileMuls32x128()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 32x128: {result.error}"
+
+    def test_tile_divs_128x128(self, test_runner):
+        """Test tile-scalar division with 128x128 shape."""
+        test_case = TestTileDivs()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 128x128: {result.error}"
+
+    def test_tile_divs_32x128(self, test_runner):
+        """Test tile-scalar division with 32x128 shape."""
+        test_case = TestTileDivs32x128()
+        result = test_runner.run(test_case)
+        assert result.passed, f"Test failed for 32x128: {result.error}"
 
     @pytest.mark.skip(reason="PTOAS optimization strategy has calculation issues - needs investigation")
     def test_tile_add_ptoas_strategy(self, test_runner):

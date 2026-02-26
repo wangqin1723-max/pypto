@@ -15,6 +15,7 @@ from pypto import backend
 from pypto.backend import BackendType
 from pypto.ir.pass_manager import PassManager
 
+
 class TestBlockReductionOps:
     """Test suite for block-level reduction operators."""
 

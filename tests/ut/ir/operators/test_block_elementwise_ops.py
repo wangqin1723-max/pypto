@@ -12,6 +12,7 @@
 
 import pypto.language as pl
 
+
 class TestBlockElementwiseOps:
     """Test suite for block-level element-wise operators (tile-tile and tile-scalar)."""
 
@@ -157,6 +158,7 @@ class TestBlockElementwiseOps:
 
         ir_str = str(Program)
         assert "block.cmps" in ir_str
+
 
 class TestBlockBitwiseArithmeticOps:
     """Test suite for newly added block-level bitwise and arithmetic ops (rem, and, or, xor)."""

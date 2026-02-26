@@ -14,6 +14,7 @@ import pypto.language as pl
 from pypto import DataType, ir
 from pypto.ir.op import block
 
+
 class TestBlockTransformOps:
     """Test suite for block-level transform operators."""
 
@@ -130,6 +131,7 @@ class TestTileTransformOps:
         assert ir.is_op_registered("block.view")
         assert ir.is_op_registered("block.reshape")
         assert ir.is_op_registered("block.transpose")
+
 
 class TestMultiDimensionalTileOps:
     """Tests for multi-dimensional TileType operations."""
