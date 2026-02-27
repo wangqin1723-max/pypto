@@ -56,7 +56,7 @@ class TestTileAdd(PTOTestCase):
                 self,
                 a: pl.Tensor[[128, 128], pl.FP32],
                 b: pl.Tensor[[128, 128], pl.FP32],
-                c: pl.Tensor[[128, 128], pl.FP32],
+                c: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
             ) -> pl.Tensor[[128, 128], pl.FP32]:
                 tile_a = pl.block.load(a, offsets=[0, 0], shapes=[128, 128])
                 tile_b = pl.block.load(b, offsets=[0, 0], shapes=[128, 128])
@@ -68,7 +68,8 @@ class TestTileAdd(PTOTestCase):
             def orchestrator(
                 self, a: pl.Tensor[[128, 128], pl.FP32], b: pl.Tensor[[128, 128], pl.FP32]
             ) -> pl.Tensor[[128, 128], pl.FP32]:
-                out_c = self.tile_add(a, b)
+                out_c: pl.Tensor[[128, 128], pl.FP32] = pl.create_tensor([128, 128], dtype=pl.FP32)
+                out_c = self.tile_add(a, b, out_c)
                 return out_c
 
         return TileAddProgram
@@ -100,7 +101,7 @@ class TestTileAdd64x64(PTOTestCase):
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
                 b: pl.Tensor[[64, 64], pl.FP32],
-                c: pl.Tensor[[64, 64], pl.FP32],
+                c: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
             ) -> pl.Tensor[[64, 64], pl.FP32]:
                 tile_a = pl.block.load(a, offsets=[0, 0], shapes=[64, 64])
                 tile_b = pl.block.load(b, offsets=[0, 0], shapes=[64, 64])
@@ -112,7 +113,8 @@ class TestTileAdd64x64(PTOTestCase):
             def orchestrator(
                 self, a: pl.Tensor[[64, 64], pl.FP32], b: pl.Tensor[[64, 64], pl.FP32]
             ) -> pl.Tensor[[64, 64], pl.FP32]:
-                out_c = self.tile_add(a, b)
+                out_c: pl.Tensor[[64, 64], pl.FP32] = pl.create_tensor([64, 64], dtype=pl.FP32)
+                out_c = self.tile_add(a, b, out_c)
                 return out_c
 
         return TileAddProgram
@@ -156,7 +158,7 @@ class TestTileMul(PTOTestCase):
                 self,
                 a: pl.Tensor[[128, 128], pl.FP32],
                 b: pl.Tensor[[128, 128], pl.FP32],
-                c: pl.Tensor[[128, 128], pl.FP32],
+                c: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
             ) -> pl.Tensor[[128, 128], pl.FP32]:
                 tile_a = pl.block.load(a, offsets=[0, 0], shapes=[128, 128])
                 tile_b = pl.block.load(b, offsets=[0, 0], shapes=[128, 128])
@@ -168,7 +170,8 @@ class TestTileMul(PTOTestCase):
             def orchestrator(
                 self, a: pl.Tensor[[128, 128], pl.FP32], b: pl.Tensor[[128, 128], pl.FP32]
             ) -> pl.Tensor[[128, 128], pl.FP32]:
-                out_c = self.tile_mul(a, b)
+                out_c: pl.Tensor[[128, 128], pl.FP32] = pl.create_tensor([128, 128], dtype=pl.FP32)
+                out_c = self.tile_mul(a, b, out_c)
                 return out_c
 
         return TileMulProgram
@@ -205,7 +208,7 @@ class TestTileMul64x64(PTOTestCase):
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
                 b: pl.Tensor[[64, 64], pl.FP32],
-                c: pl.Tensor[[64, 64], pl.FP32],
+                c: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
             ) -> pl.Tensor[[64, 64], pl.FP32]:
                 tile_a = pl.block.load(a, offsets=[0, 0], shapes=[64, 64])
                 tile_b = pl.block.load(b, offsets=[0, 0], shapes=[64, 64])
@@ -217,7 +220,8 @@ class TestTileMul64x64(PTOTestCase):
             def orchestrator(
                 self, a: pl.Tensor[[64, 64], pl.FP32], b: pl.Tensor[[64, 64], pl.FP32]
             ) -> pl.Tensor[[64, 64], pl.FP32]:
-                out_c = self.tile_mul(a, b)
+                out_c: pl.Tensor[[64, 64], pl.FP32] = pl.create_tensor([64, 64], dtype=pl.FP32)
+                out_c = self.tile_mul(a, b, out_c)
                 return out_c
 
         return TileMulProgram
