@@ -180,7 +180,7 @@ TypePtr DeduceBlockMoveType(const std::vector<ExprPtr>& args,
 
   TileView tile_view;
   if (space == MemorySpace::Left) {
-    tile_view.blayout = TileLayout::col_major;
+    tile_view.blayout = TileLayout::col_major;  // L0A requires ColMajor block layout for TMATMUL
     tile_view.slayout = TileLayout::row_major;
   } else if (space == MemorySpace::Right) {
     tile_view.slayout = TileLayout::col_major;
@@ -189,20 +189,26 @@ TypePtr DeduceBlockMoveType(const std::vector<ExprPtr>& args,
   if (transpose && input_shape.size() == 2) {
     // Transpose: swap dimensions [H, W] -> [W, H]
     output_shape = {input_shape[1], input_shape[0]};
-    // For hardware matrix memory spaces (Left/Right), the tile layout is fixed
-    // by hardware requirements; transpose only affects the DMA data copy.
-    if (space != MemorySpace::Left && space != MemorySpace::Right) {
-      if (tile_view.slayout != TileLayout::none_box) {
-        std::swap(tile_view.blayout, tile_view.slayout);
-      } else {
-        tile_view.blayout =
-            tile_view.blayout == TileLayout::row_major ? TileLayout::col_major : TileLayout::row_major;
-      }
+    // Fix: layout should be determined by src layout?
+    if (tile_view.slayout != TileLayout::none_box) {
+      std::swap(tile_view.blayout, tile_view.slayout);
+    } else {
+      tile_view.blayout =
+          tile_view.blayout == TileLayout::row_major ? TileLayout::col_major : TileLayout::row_major;
     }
   } else {
     // No transpose: keep original shape
     output_shape = input_shape;
   }
+
+  // Preserve input valid_shape (may be narrower than shape_); transpose if needed
+  auto input_valid_shape = (tile_type->tile_view_ && !tile_type->tile_view_->valid_shape.empty())
+                               ? tile_type->tile_view_->valid_shape
+                               : input_shape;
+  if (transpose && input_valid_shape.size() == 2) {
+    std::swap(input_valid_shape[0], input_valid_shape[1]);
+  }
+  tile_view.valid_shape = input_valid_shape;
 
   // Return TileType with computed shape and same dtype (no explicit MemRef)
   return std::make_shared<TileType>(output_shape, tile_type->dtype_, std::nullopt, tile_view);
