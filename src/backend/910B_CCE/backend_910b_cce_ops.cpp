@@ -215,8 +215,8 @@ static std::string MakeBlockStoreCodegenCCE(const ir::CallPtr& op, codegen::Code
 
   codegen.Emit("TASSIGN(" + dst_tensor_var + ", " + dst_ptr + " + " + offset + ");");
   codegen.Emit("TSTORE(" + dst_tensor_var + ", " + src_tile + ");");
-  codegen.RegisterOutputPointer(var_name, dst_tensor_var);
-  codegen.RegisterOutputTensorStruct(var_name, dst_tensor_var);
+  codegen.RegisterOutputPointer(var_name, codegen.GetPointer(dst_tensor_var));
+  codegen.RegisterOutputTensorStruct(var_name, codegen.GetTensorStruct(dst_tensor_var));
   codegen.Emit("auto " + var_name + " = " + dst_tensor_var + ";");
   return "";
 }
@@ -256,8 +256,8 @@ static std::string MakeBlockL0CStoreCodegenCCE(const ir::CallPtr& op, codegen::C
 
   codegen.Emit("TASSIGN(" + dst_tensor_var + ", " + dst_ptr + " + " + offset + ");");
   codegen.Emit("TSTORE(" + dst_tensor_var + ", " + src_tile + ");");
-  codegen.RegisterOutputPointer(var_name, dst_tensor_var);
-  codegen.RegisterOutputTensorStruct(var_name, dst_tensor_var);
+  codegen.RegisterOutputPointer(var_name, codegen.GetPointer(dst_tensor_var));
+  codegen.RegisterOutputTensorStruct(var_name, codegen.GetTensorStruct(dst_tensor_var));
   codegen.Emit("auto " + var_name + " = " + dst_tensor_var + ";");
   return "";
 }
