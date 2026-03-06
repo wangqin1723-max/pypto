@@ -394,7 +394,7 @@ def build_llama_mini_program(
         # =========================================================================
 
         @pl.function(type=pl.FunctionType.Orchestration)
-        def llama_mini_orch(
+        def llama_mini_orch(  # noqa: PLR0913
             self,
             # Input hidden states
             hidden: pl.Tensor[[seq_len, head_dim], pl.FP32],

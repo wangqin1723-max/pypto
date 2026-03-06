@@ -39,7 +39,7 @@ import pytest
 import torch
 from harness.core.harness import DataType, PTOTestCase, TensorSpec
 
-from examples.language.intermediate.llama_7b_mini import build_llama_mini_program
+from examples.language.llm_models.llama_7b_mini import build_llama_mini_program
 
 
 class TestLlamaMini(PTOTestCase):
