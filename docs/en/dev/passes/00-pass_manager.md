@@ -56,8 +56,11 @@ struct PassProperties {
 
 | Pass | Required | Produced | Invalidated |
 | ---- | -------- | -------- | ----------- |
+| UnrollLoops | TypeChecked | TypeChecked | — |
 | ConvertToSSA | TypeChecked | TypeChecked, SSAForm | NormalizedStmtStructure, FlattenedSingleStmt |
 | FlattenCallExpr | TypeChecked | TypeChecked, NoNestedCalls | NormalizedStmtStructure, FlattenedSingleStmt |
+| SplitChunkedLoops | TypeChecked, SSAForm | TypeChecked, SSAForm | — |
+| InterchangeChunkLoops | TypeChecked, SSAForm | TypeChecked, SSAForm | — |
 | NormalizeStmtStructure | TypeChecked | TypeChecked, NormalizedStmtStructure | FlattenedSingleStmt |
 | FlattenSingleStmt | TypeChecked | TypeChecked, FlattenedSingleStmt | NormalizedStmtStructure |
 | OutlineIncoreScopes | TypeChecked, SSAForm | SplitIncoreOrch | — |

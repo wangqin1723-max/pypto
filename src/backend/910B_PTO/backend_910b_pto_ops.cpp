@@ -22,7 +22,7 @@
 #include "pypto/core/logging.h"
 #include "pypto/ir/expr.h"
 #include "pypto/ir/kind_traits.h"
-#include "pypto/ir/pipe.h"
+#include "pypto/ir/scalar_expr.h"
 #include "pypto/ir/type.h"
 
 namespace pypto {
@@ -30,7 +30,6 @@ namespace backend {
 
 using ir::As;
 using ir::CallPtr;
-using ir::PipeType;
 using ir::TensorType;
 using ir::Var;
 
@@ -292,16 +291,23 @@ static std::string MakeBlockStoreCodegenPTO(const CallPtr& op, codegen::CodegenB
   auto offsets_tuple = As<ir::MakeTuple>(op->args_[1]);
   INTERNAL_CHECK(offsets_tuple) << "block.store second argument must be a tuple (offsets)";
 
-  // Extract shapes tuple
-  auto shapes_tuple = As<ir::MakeTuple>(op->args_[2]);
-  INTERNAL_CHECK(shapes_tuple) << "block.store third argument must be a tuple (shapes)";
+  // Get tile type and extract shape for height/width
+  // The tile's valid_shape is required and used to determine the store dimensions.
+  auto tile_type = As<ir::TileType>(tile->GetType());
+  INTERNAL_CHECK(tile_type) << "block.store first argument must have TileType";
+  INTERNAL_CHECK(tile_type->tile_view_.has_value()) << "block.store tile must have TileView with valid_shape";
+  auto& valid_shape = tile_type->tile_view_->valid_shape;
+  INTERNAL_CHECK(valid_shape.size() == 2) << "block.store tile valid_shape must be 2D";
 
-  // Extract 2D offset and size values from tuples
+  // Extract 2D offset values
   auto row_off = codegen.GetExprAsCode(offsets_tuple->elements_[0]);
   auto col_off = codegen.GetExprAsCode(offsets_tuple->elements_[1]);
-  int64_t height = codegen.GetConstIntValue(shapes_tuple->elements_[0]);
-  int64_t width = codegen.GetConstIntValue(shapes_tuple->elements_[1]);
-  auto output_tensor = As<Var>(op->args_[3]);
+
+  // Extract height/width from tile's valid shape (may be static or dynamic)
+  auto height_code = codegen.GetExprAsCode(valid_shape[0]);
+  auto width_code = codegen.GetExprAsCode(valid_shape[1]);
+
+  auto output_tensor = As<Var>(op->args_[2]);
   INTERNAL_CHECK(output_tensor) << "block.store output_tensor must be a Var";
 
   auto tensor_type = As<TensorType>(output_tensor->GetType());
@@ -311,24 +317,23 @@ static std::string MakeBlockStoreCodegenPTO(const CallPtr& op, codegen::CodegenB
   std::string tensor_view = codegen.GetOrCreateTensorView(output_tensor);
   std::string tile_buf = codegen.GetVarName(tile);
 
+  // Build partition_type: use concrete dims for static shapes, ? for dynamic
+  std::string height_dim = "?", width_dim = "?";
+  if (auto h = As<ir::ConstInt>(valid_shape[0])) height_dim = std::to_string(h->value_);
+  if (auto w = As<ir::ConstInt>(valid_shape[1])) width_dim = std::to_string(w->value_);
   std::string tensor_view_type = codegen.GetTensorViewTypeString(tensor_type.get());
-  std::string partition_type = "!pto.partition_tensor_view<" + std::to_string(height) + "x" +
-                               std::to_string(width) + "x" + dtype_str + ">";
+  std::string partition_type =
+      "!pto.partition_tensor_view<" + height_dim + "x" + width_dim + "x" + dtype_str + ">";
 
-  // Get tile_buf type from the tile variable's TileType
-  std::string tile_buf_type;
-  if (auto tile_type = As<ir::TileType>(tile->GetType())) {
-    if (tile_type->memref_.has_value()) {
-      tile_buf_type = codegen.GetTileBufTypeString(tile_type->memref_.value().get());
-    }
-  }
+  // Get tile_buf type via GetExprTypeAnnotation which correctly handles
+  // dynamically-allocated buffers (e.g., reshape outputs in extra_tile_buf_types_)
+  std::string tile_buf_type = codegen.GetExprTypeAnnotation(op->args_[0]);
 
   std::string partition_view = codegen.NewTemp();
   std::ostringstream partition_line;
   partition_line << partition_view << " = pto.partition_view " << tensor_view;
   partition_line << ", offsets = [" << row_off << ", " << col_off << "]";
-  partition_line << ", sizes = [" << codegen.GetIndexConstant(height) << ", ";
-  partition_line << codegen.GetIndexConstant(width) << "]";
+  partition_line << ", sizes = [" << height_code << ", " << width_code << "]";
   partition_line << " : " << tensor_view_type << " -> " << partition_type;
   codegen.Emit(partition_line.str());
 
@@ -349,6 +354,34 @@ static std::string MakeBlockAllocCodegenPTO(const CallPtr& op, codegen::CodegenB
   return "";  // No MLIR emission - pto.alloc_tile generated from MemRefs in TileTypes
 }
 
+static std::string MakeTensorDimCodegenPTO(const CallPtr& op, codegen::CodegenBase& codegen_base) {
+  auto& codegen = dynamic_cast<codegen::PTOCodegen&>(codegen_base);
+  CHECK(op->args_.size() == 2) << "tensor.dim requires 2 arguments, but got " << op->args_.size();
+  auto input_tensor = ir::As<ir::TensorType>(op->args_[0]->GetType());
+  CHECK(input_tensor) << "tensor.dim need TensorType for first arg, but got "
+                      << op->args_[0]->GetType()->TypeName();
+  auto axis = codegen.GetConstIntValue(op->args_[1]);
+  CHECK(axis >= 0 && static_cast<size_t>(axis) < input_tensor->shape_.size())
+      << "tensor.dim axis " << axis << " out of range for tensor with rank " << input_tensor->shape_.size();
+  auto shape = input_tensor->shape_[axis];
+  std::string shape_name;
+  // dynamic shape
+  if (auto dyn_shape = ir::As<ir::Var>(shape)) {
+    shape_name = codegen.GetVarName(dyn_shape);
+  } else if (auto static_shape = ir::As<ir::ConstInt>(shape)) {  // constant shape
+    shape_name = codegen.GetIndexConstant(static_shape->value_);
+  } else {
+    INTERNAL_CHECK(false) << "Internal error: tensor.dim shape is neither Var nor ConstInt";
+  }
+  // register target var to shape name so later uses (e.g., pl.range(M)) resolve correctly
+  auto target_var_name = codegen.GetCurrentResultTarget();
+  if (!target_var_name.empty() && !shape_name.empty()) {
+    codegen.RegisterVarToMlir(target_var_name, shape_name);
+  }
+
+  return "";
+}
+
 // ============================================================================
 // Table-driven registration for simple N-ary operations
 // ============================================================================
@@ -357,7 +390,6 @@ struct SimpleOpEntry {
   const char* op_name;
   const char* pto_op_name;
   size_t arity;
-  PipeType pipe = PipeType::V;
 };
 
 // clang-format off
@@ -431,18 +463,18 @@ static const SimpleOpEntry kSimpleOps[] = {
     // Padding operations
     {"block.fillpad",         "pto.tfillpad",         1},
     // Matrix multiplication operations (PipeType::M → CUBE/AIC core)
-    {"block.matmul",          "pto.tmatmul",          2, PipeType::M},
-    {"block.matmul_mx",       "pto.tmatmul.mx",       4, PipeType::M},
-    {"block.matmul_mx_acc",   "pto.tmatmul.mx.acc",   5, PipeType::M},
-    {"block.matmul_mx_bias",  "pto.tmatmul.mx.bias",  5, PipeType::M},
-    {"block.matmul_acc",      "pto.tmatmul.acc",      3, PipeType::M},
-    {"block.matmul_bias",     "pto.tmatmul.bias",     3, PipeType::M},
-    {"block.gemv",            "pto.tgemv",            2, PipeType::M},
-    {"block.gemv_acc",        "pto.tgemv.acc",        3, PipeType::M},
-    {"block.gemv_bias",       "pto.tgemv.bias",       3, PipeType::M},
+    {"block.matmul",          "pto.tmatmul",          2},
+    {"block.matmul_mx",       "pto.tmatmul.mx",       4},
+    {"block.matmul_mx_acc",   "pto.tmatmul.mx.acc",   5},
+    {"block.matmul_mx_bias",  "pto.tmatmul.mx.bias",  5},
+    {"block.matmul_acc",      "pto.tmatmul.acc",      3},
+    {"block.matmul_bias",     "pto.tmatmul.bias",     3},
+    {"block.gemv",            "pto.tgemv",            2},
+    {"block.gemv_acc",        "pto.tgemv.acc",        3},
+    {"block.gemv_bias",       "pto.tgemv.bias",       3},
     // Data movement/layout operations (PipeType::MTE1 → memory transfer, not V/M)
-    {"block.move",            "pto.tmov",             1, PipeType::MTE1},
-    {"block.move_fp",         "pto.tmov.fp",          2, PipeType::MTE1},
+    {"block.move",            "pto.tmov",             1},
+    {"block.move_fp",         "pto.tmov.fp",          2},
     {"block.transpose",       "pto.ttrans",           3},
     {"block.extract",         "pto.textract",         3},
     // Gather/scatter operations
@@ -462,7 +494,6 @@ static void RegisterSimpleOps() {
     size_t arity = entry.arity;
     Backend910B_PTO::Instance()
         .RegisterOp(entry.op_name)
-        .set_pipe(entry.pipe)
         .f_codegen([pto_op, arity](const CallPtr& op, codegen::CodegenBase& codegen) {
           return MakeNaryCodegenPTO(pto_op, arity, op, codegen);
         });
@@ -479,31 +510,21 @@ static const bool kSimpleOpsRegistered = [] {
 // ============================================================================
 
 REGISTER_BACKEND_OP(Backend910B_PTO, "block.load")
-    .set_pipe(ir::PipeType::MTE2)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
       return MakeBlockLoadCodegenPTO(op, codegen);
     });
 
 REGISTER_BACKEND_OP(Backend910B_PTO, "block.store")
-    .set_pipe(ir::PipeType::MTE2)
-    .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
-      return MakeBlockStoreCodegenPTO(op, codegen);
-    });
-
-REGISTER_BACKEND_OP(Backend910B_PTO, "block.l0c_store")
-    .set_pipe(ir::PipeType::MTE3)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
       return MakeBlockStoreCodegenPTO(op, codegen);
     });
 
 REGISTER_BACKEND_OP(Backend910B_PTO, "block.alloc")
-    .set_pipe(ir::PipeType::MTE2)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
       return MakeBlockAllocCodegenPTO(op, codegen);
     });
 
 REGISTER_BACKEND_OP(Backend910B_PTO, "block.create_tile")
-    .set_pipe(ir::PipeType::MTE2)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen_base) {
       (void)op;
       (void)codegen_base;
@@ -511,78 +532,88 @@ REGISTER_BACKEND_OP(Backend910B_PTO, "block.create_tile")
     });
 
 REGISTER_BACKEND_OP(Backend910B_PTO, "block.store_fp")
-    .set_pipe(ir::PipeType::V)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
       return MakeStoreFPCodegenPTO("pto.tstore.fp", op, codegen);
     });
 
 REGISTER_BACKEND_OP(Backend910B_PTO, "block.cmp")
-    .set_pipe(ir::PipeType::V)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
       return MakeTileCmpCodegenPTO("pto.tcmp", op, codegen);
     });
 
 REGISTER_BACKEND_OP(Backend910B_PTO, "block.cast")
-    .set_pipe(ir::PipeType::V)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
       return MakeTileCvtCodegenPTO("pto.tcvt", op, codegen);
     });
 
 REGISTER_BACKEND_OP(Backend910B_PTO, "block.full")
-    .set_pipe(ir::PipeType::V)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
       return MakeFullCodegenPTO("pto.texpands", op, codegen);
     });
 
 REGISTER_BACKEND_OP(Backend910B_PTO, "block.cmps")
-    .set_pipe(ir::PipeType::V)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
       return MakeCmpsCodegenPTO("pto.tcmps", op, codegen);
     });
 
 REGISTER_BACKEND_OP(Backend910B_PTO, "block.assign")
-    .set_pipe(ir::PipeType::V)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
       return MakeAssignCodegenPTO("pto.tassign", op, codegen);
     });
 
 REGISTER_BACKEND_OP(Backend910B_PTO, "block.ci")
-    .set_pipe(ir::PipeType::V)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
       return MakeCiCodegenPTO("pto.tci", op, codegen);
     });
 
 // TODO(guoliwei): Sorting operations typically have multiple outputs, which has not yet been addressed.
 REGISTER_BACKEND_OP(Backend910B_PTO, "block.sort32")
-    .set_pipe(ir::PipeType::V)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
       return MakeSort32CodegenPTO("pto.tsort32", op, codegen);
     });
 
 // TODO(guoliwei): Sorting operations typically have multiple outputs, which has not yet been addressed.
 REGISTER_BACKEND_OP(Backend910B_PTO, "block.mrgsort")
-    .set_pipe(ir::PipeType::V)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
       return MakeMrgSortCodegenPTO("pto.tmrgsort", op, codegen);
     });
 
 REGISTER_BACKEND_OP(Backend910B_PTO, "block.print")
-    .set_pipe(ir::PipeType::V)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
       return MakePrintCodegenPTO("pto.tprint", op, codegen);
     });
 
+REGISTER_BACKEND_OP(Backend910B_PTO, "tensor.dim")
+    .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
+      return MakeTensorDimCodegenPTO(op, codegen);
+    });
+
 REGISTER_BACKEND_OP(Backend910B_PTO, "block.reshape")
-    .set_pipe(ir::PipeType::V)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen_base) {
       auto& codegen = dynamic_cast<codegen::PTOCodegen&>(codegen_base);
       CHECK(op->args_.size() == 2) << "Operation:[block.reshape] requires 2 arguments (tile, shape), but got "
                                    << op->args_.size();
       // Only use the first argument (source tile); shape tuple is metadata
       std::string src = codegen.GetExprAsCode(op->args_[0]);
-      std::string src_type = codegen.GetExprTypeAnnotation(op->args_[0]);
       std::string result_target = codegen.GetCurrentResultTarget();
       std::string result_type = codegen.GetCurrentResultTileBufTypeString();
+      // Get the correct input type directly from the source variable's TileType,
+      // bypassing the memref_to_tile_type_ lookup which may return the wrong shape
+      // when input and output share the same MemRef.
+      std::string src_type;
+      if (auto src_var = ir::As<Var>(op->args_[0])) {
+        if (auto tile_type = ir::As<ir::TileType>(src_var->GetType())) {
+          if (tile_type->memref_.has_value()) {
+            src_type = codegen.GetTileBufTypeStringFromTileType(tile_type);
+          }
+        }
+      }
+      // PTO bytecode requires distinct tile buffers for reshape input/output.
+      // When both resolve to the same buffer (shared MemRef), allocate a new output buffer.
+      if (src == result_target && !result_type.empty()) {
+        result_target = codegen.AllocNewTileBuf(result_type);
+        codegen.SetCurrentResultBuf(result_target);
+      }
       std::ostringstream oss;
       oss << "pto.treshape ins(" << src;
       if (!src_type.empty()) oss << " : " << src_type;

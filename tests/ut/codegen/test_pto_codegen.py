@@ -35,6 +35,40 @@ from pypto.ir.pto_codegen import (
 
 PTOCodegen = codegen.PTOCodegen
 
+# Dynamic shape variables for wrapper dispatch tests
+# pyright: reportUndefinedVariable=false
+_TH = pl.dynamic("TH")
+_TW = pl.dynamic("TW")
+
+
+@pl.program
+class _DynKernel:
+    """Dynamic shape kernel used in wrapper dispatch tests."""
+
+    @pl.function(type=pl.FunctionType.InCore)
+    def dyn_func(
+        self,
+        a: pl.Tensor[[_TH, _TW], pl.FP32],
+        b: pl.Tensor[[_TH, _TW], pl.FP32],
+        output: pl.Tensor[[_TH, _TW], pl.FP32],
+    ) -> pl.Tensor[[_TH, _TW], pl.FP32]:
+        a_tile = pl.load(a, [0, 0], [128, 128])
+        b_tile = pl.load(b, [0, 0], [128, 128])
+        result = pl.add(a_tile, b_tile)
+        return pl.store(result, [0, 0], output)
+
+
+def _get_dyn_incore_func():
+    """Return the transformed InCore function from _DynKernel."""
+    backend.reset_for_testing()
+    backend.set_backend_type(BackendType.PTO)
+    pm = PassManager.get_strategy(OptimizationStrategy.PTOAS)
+    transformed = pm.run_passes(_DynKernel)
+    for func in transformed.functions.values():
+        if func.func_type == ir.FunctionType.InCore:
+            return func
+    raise RuntimeError("No InCore function found in _DynKernel")
+
 
 def _get_mlir_code(result):
     """Normalize generate() result to MLIR string (support both str and dict)."""
@@ -85,12 +119,12 @@ def _make_func(name, params_spec):
         tensor_params = [v for v, (_, k) in zip(param_vars, params_spec) if k == "tensor"]
         if len(tensor_params) >= 2:
             t = ib.let("t", block.load(tensor_params[0], [0, 0], [16, 16]))
-            result = ib.let("result", block.store(t, [0, 0], [16, 16], tensor_params[-1]))
+            result = ib.let("result", block.store(t, [0, 0], tensor_params[-1]))
             f.return_type(ir.TensorType([16, 16], DataType.FP32))
             ib.return_stmt(result)
         elif len(tensor_params) == 1:
             t = ib.let("t", block.load(tensor_params[0], [0, 0], [16, 16]))
-            result = ib.let("result", block.store(t, [0, 0], [16, 16], tensor_params[0]))
+            result = ib.let("result", block.store(t, [0, 0], tensor_params[0]))
             f.return_type(ir.TensorType([16, 16], DataType.FP32))
             ib.return_stmt(result)
         else:
@@ -107,11 +141,12 @@ def test_pto_codegen_basic_mlir_structure():
 
     @pl.program
     class BasicProgram:
-        @pl.function
+        @pl.function(type=pl.FunctionType.InCore)
         def test_func(self, a: pl.Tensor[[32, 32], pl.FP32], b: pl.Tensor[[32, 32], pl.FP32]):
             tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 32])
             tile_b = pl.add(tile_a, 1.0)
-            pl.store(tile_b, offsets=[0, 0], shapes=[32, 32], output_tensor=b)
+            pl.store(tile_b, offsets=[0, 0], output_tensor=b)
+            return  # noqa: PLR1711 - DSL requires explicit return to build IR return statement
 
     # Compile with PTOAS strategy (applies necessary passes + codegen)
     pm = PassManager.get_strategy(OptimizationStrategy.PTOAS)
@@ -135,7 +170,7 @@ def test_pto_codegen_tensor_parameters():
 
     @pl.program
     class TensorParamProgram:
-        @pl.function
+        @pl.function(type=pl.FunctionType.InCore)
         def tensor_param_func(
             self,
             input_a: pl.Tensor[[64, 64], pl.FP32],
@@ -145,7 +180,8 @@ def test_pto_codegen_tensor_parameters():
             tile_a = pl.load(input_a, offsets=[0, 0], shapes=[32, 32])
             tile_b = pl.load(input_b, offsets=[0, 0], shapes=[32, 32])
             tile_c = pl.mul(tile_a, tile_b)
-            pl.store(tile_c, offsets=[0, 0], shapes=[32, 32], output_tensor=output)
+            pl.store(tile_c, offsets=[0, 0], output_tensor=output)
+            return  # noqa: PLR1711 - DSL requires explicit return to build IR return statement
 
     pm = PassManager.get_strategy(OptimizationStrategy.PTOAS)
     transformed_program = pm.run_passes(TensorParamProgram)
@@ -172,12 +208,13 @@ def test_pto_codegen_alloc_tile():
 
     @pl.program
     class AllocTileProgram:
-        @pl.function
+        @pl.function(type=pl.FunctionType.InCore)
         def alloc_test(self, a: pl.Tensor[[32, 32], pl.FP32], b: pl.Tensor[[32, 32], pl.FP32]):
             tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 32])
             tile_b = pl.load(a, offsets=[0, 0], shapes=[32, 32])
             tile_c = pl.mul(tile_a, tile_b)
-            pl.store(tile_c, offsets=[0, 0], shapes=[32, 32], output_tensor=b)
+            pl.store(tile_c, offsets=[0, 0], output_tensor=b)
+            return  # noqa: PLR1711 - DSL requires explicit return to build IR return statement
 
     pm = PassManager.get_strategy(OptimizationStrategy.PTOAS)
     transformed_program = pm.run_passes(AllocTileProgram)
@@ -197,10 +234,11 @@ def test_pto_codegen_block_load_lowering():
 
     @pl.program
     class LoadProgram:
-        @pl.function
+        @pl.function(type=pl.FunctionType.InCore)
         def load_test(self, input: pl.Tensor[[64, 64], pl.FP32], output: pl.Tensor[[64, 64], pl.FP32]):
             tile = pl.load(input, offsets=[0, 0], shapes=[32, 32])
-            pl.store(tile, offsets=[0, 0], shapes=[32, 32], output_tensor=output)
+            pl.store(tile, offsets=[0, 0], output_tensor=output)
+            return  # noqa: PLR1711 - DSL requires explicit return to build IR return statement
 
     pm = PassManager.get_strategy(OptimizationStrategy.PTOAS)
     transformed_program = pm.run_passes(LoadProgram)
@@ -226,10 +264,11 @@ def test_pto_codegen_block_store_lowering():
 
     @pl.program
     class StoreProgram:
-        @pl.function
+        @pl.function(type=pl.FunctionType.InCore)
         def store_test(self, input: pl.Tensor[[32, 32], pl.FP32], output: pl.Tensor[[32, 32], pl.FP32]):
             tile = pl.load(input, offsets=[0, 0], shapes=[32, 32])
-            pl.store(tile, offsets=[0, 0], shapes=[32, 32], output_tensor=output)
+            pl.store(tile, offsets=[0, 0], output_tensor=output)
+            return  # noqa: PLR1711 - DSL requires explicit return to build IR return statement
 
     pm = PassManager.get_strategy(OptimizationStrategy.PTOAS)
     transformed_program = pm.run_passes(StoreProgram)
@@ -248,7 +287,7 @@ def test_pto_codegen_block_mul():
 
     @pl.program
     class MulProgram:
-        @pl.function
+        @pl.function(type=pl.FunctionType.InCore)
         def mul_test(
             self,
             a: pl.Tensor[[32, 32], pl.FP32],
@@ -258,7 +297,8 @@ def test_pto_codegen_block_mul():
             tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 32])
             tile_b = pl.load(b, offsets=[0, 0], shapes=[32, 32])
             tile_c = pl.mul(tile_a, tile_b)
-            pl.store(tile_c, offsets=[0, 0], shapes=[32, 32], output_tensor=c)
+            pl.store(tile_c, offsets=[0, 0], output_tensor=c)
+            return  # noqa: PLR1711 - DSL requires explicit return to build IR return statement
 
     pm = PassManager.get_strategy(OptimizationStrategy.PTOAS)
     transformed_program = pm.run_passes(MulProgram)
@@ -277,11 +317,12 @@ def test_pto_codegen_block_adds():
 
     @pl.program
     class AddsProgram:
-        @pl.function
+        @pl.function(type=pl.FunctionType.InCore)
         def adds_test(self, a: pl.Tensor[[32, 32], pl.FP32], b: pl.Tensor[[32, 32], pl.FP32]):
             tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 32])
             tile_b = pl.add(tile_a, 3.14)
-            pl.store(tile_b, offsets=[0, 0], shapes=[32, 32], output_tensor=b)
+            pl.store(tile_b, offsets=[0, 0], output_tensor=b)
+            return  # noqa: PLR1711 - DSL requires explicit return to build IR return statement
 
     pm = PassManager.get_strategy(OptimizationStrategy.PTOAS)
     transformed_program = pm.run_passes(AddsProgram)
@@ -304,10 +345,11 @@ def test_pto_codegen_constants():
 
     @pl.program
     class ConstantProgram:
-        @pl.function
+        @pl.function(type=pl.FunctionType.InCore)
         def const_test(self, a: pl.Tensor[[32, 32], pl.FP32], b: pl.Tensor[[32, 32], pl.FP32]):
             tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 32])
-            pl.store(tile_a, offsets=[0, 0], shapes=[32, 32], output_tensor=b)
+            pl.store(tile_a, offsets=[0, 0], output_tensor=b)
+            return  # noqa: PLR1711 - DSL requires explicit return to build IR return statement
 
     pm = PassManager.get_strategy(OptimizationStrategy.PTOAS)
     transformed_program = pm.run_passes(ConstantProgram)
@@ -328,7 +370,7 @@ def test_pto_codegen_ssa_naming():
 
     @pl.program
     class SSAProgram:
-        @pl.function
+        @pl.function(type=pl.FunctionType.InCore)
         def ssa_test(
             self,
             a: pl.Tensor[[32, 32], pl.FP32],
@@ -338,7 +380,8 @@ def test_pto_codegen_ssa_naming():
             tile_a = pl.load(a, offsets=[0, 0], shapes=[32, 32])
             tile_b = pl.load(b, offsets=[0, 0], shapes=[32, 32])
             tile_c = pl.mul(tile_a, tile_b)
-            pl.store(tile_c, offsets=[0, 0], shapes=[32, 32], output_tensor=c)
+            pl.store(tile_c, offsets=[0, 0], output_tensor=c)
+            return  # noqa: PLR1711 - DSL requires explicit return to build IR return statement
 
     pm = PassManager.get_strategy(OptimizationStrategy.PTOAS)
     transformed_program = pm.run_passes(SSAProgram)
@@ -359,10 +402,11 @@ def test_pto_codegen_code_generation_order():
 
     @pl.program
     class OrderProgram:
-        @pl.function
+        @pl.function(type=pl.FunctionType.InCore)
         def order_test(self, a: pl.Tensor[[32, 32], pl.FP32], b: pl.Tensor[[32, 32], pl.FP32]):
             tile = pl.load(a, offsets=[0, 0], shapes=[32, 32])
-            pl.store(tile, offsets=[0, 0], shapes=[32, 32], output_tensor=b)
+            pl.store(tile, offsets=[0, 0], output_tensor=b)
+            return  # noqa: PLR1711 - DSL requires explicit return to build IR return statement
 
     pm = PassManager.get_strategy(OptimizationStrategy.PTOAS)
     transformed_program = pm.run_passes(OrderProgram)
@@ -389,15 +433,17 @@ def test_pto_codegen_multiple_functions():
 
     @pl.program
     class MultiFunc:
-        @pl.function
+        @pl.function(type=pl.FunctionType.InCore)
         def func1(self, a: pl.Tensor[[32, 32], pl.FP32], b: pl.Tensor[[32, 32], pl.FP32]):
             tile = pl.load(a, offsets=[0, 0], shapes=[32, 32])
-            pl.store(tile, offsets=[0, 0], shapes=[32, 32], output_tensor=b)
+            pl.store(tile, offsets=[0, 0], output_tensor=b)
+            return  # noqa: PLR1711 - DSL requires explicit return to build IR return statement
 
-        @pl.function
+        @pl.function(type=pl.FunctionType.InCore)
         def func2(self, x: pl.Tensor[[32, 32], pl.FP32], y: pl.Tensor[[32, 32], pl.FP32]):
             tile = pl.load(x, offsets=[0, 0], shapes=[32, 32])
-            pl.store(tile, offsets=[0, 0], shapes=[32, 32], output_tensor=y)
+            pl.store(tile, offsets=[0, 0], output_tensor=y)
+            return  # noqa: PLR1711 - DSL requires explicit return to build IR return statement
 
     pm = PassManager.get_strategy(OptimizationStrategy.PTOAS)
     transformed_program = pm.run_passes(MultiFunc)
@@ -415,10 +461,11 @@ def test_pto_codegen_reusability():
 
     @pl.program
     class ReusableProgram:
-        @pl.function
+        @pl.function(type=pl.FunctionType.InCore)
         def test_func(self, a: pl.Tensor[[32, 32], pl.FP32], b: pl.Tensor[[32, 32], pl.FP32]):
             tile = pl.load(a, offsets=[0, 0], shapes=[32, 32])
-            pl.store(tile, offsets=[0, 0], shapes=[32, 32], output_tensor=b)
+            pl.store(tile, offsets=[0, 0], output_tensor=b)
+            return  # noqa: PLR1711 - DSL requires explicit return to build IR return statement
 
     pm = PassManager.get_strategy(OptimizationStrategy.PTOAS)
     transformed_program = pm.run_passes(ReusableProgram)
@@ -473,18 +520,18 @@ class TestGenerateArgUnpacking:
     def test_tensor_only(self):
         func = _make_func("test_fn", [("a", "tensor"), ("b", "tensor"), ("out", "tensor")])
         code, names = _generate_arg_unpacking(func)
-        assert "reinterpret_cast<__gm__ Tensor*>(args[0])" in code
-        assert "reinterpret_cast<__gm__ Tensor*>(args[1])" in code
-        assert "reinterpret_cast<__gm__ Tensor*>(args[2])" in code
+        assert "reinterpret_cast<__gm__ TensorData*>(args[0])" in code
+        assert "reinterpret_cast<__gm__ TensorData*>(args[1])" in code
+        assert "reinterpret_cast<__gm__ TensorData*>(args[2])" in code
         assert names == ["a", "b", "out"]
 
     def test_mixed_tensor_scalar(self):
         func = _make_func("test_fn", [("input", "tensor"), ("scale", "scalar"), ("output", "tensor")])
         code, names = _generate_arg_unpacking(func)
-        assert "reinterpret_cast<__gm__ Tensor*>(args[0])" in code
+        assert "reinterpret_cast<__gm__ TensorData*>(args[0])" in code
         assert "scale_conv.u64 = args[1];" in code
         assert "float scale = scale_conv.val;" in code
-        assert "reinterpret_cast<__gm__ Tensor*>(args[2])" in code
+        assert "reinterpret_cast<__gm__ TensorData*>(args[2])" in code
         assert names == ["input", "scale", "output"]
 
     def test_scalar_only(self):
@@ -493,6 +540,25 @@ class TestGenerateArgUnpacking:
         assert "x_conv.u64 = args[0];" in code
         assert "y_conv.u64 = args[1];" in code
         assert names == ["x", "y"]
+
+    def test_dynamic_tensor_extracts_shapes_dims(self):
+        func = _get_dyn_incore_func()
+        code, names = _generate_arg_unpacking(func)
+        # TH is dim 0 of first tensor a_0 — read from a_0_tensor->shapes[0]
+        assert "a_0_tensor->shapes[0]" in code
+        assert "int64_t TH" in code
+        # TW is dim 1 of first tensor a_0 — read from a_0_tensor->shapes[1]
+        assert "a_0_tensor->shapes[1]" in code
+        assert "int64_t TW" in code
+        # dynamic dims appended after tensor params
+        assert names == ["a_0", "b_0", "output_0", "TH", "TW"]
+
+    def test_dynamic_tensor_deduplicates_vars(self):
+        # TH and TW each appear in a_0, b_0, and output_0 but should be extracted only once
+        func = _get_dyn_incore_func()
+        code, names = _generate_arg_unpacking(func)
+        assert code.count("int64_t TH") == 1
+        assert code.count("int64_t TW") == 1
 
 
 class TestGenerateKernelWrapper:
@@ -527,6 +593,18 @@ class TestGenerateKernelWrapper:
         count = wrapper.count("#include <pto/pto-inst.hpp>")
         assert count == 1, f"Expected 1 pto-inst include, found {count}"
 
+    def test_dynamic_shape_forward_call_includes_dims(self):
+        func = _get_dyn_incore_func()
+        wrapper = _generate_kernel_wrapper(func, SAMPLE_PTOAS_OUTPUT)
+        # Forward call must include dynamic dims TH and TW after tensor args (SSA-renamed with _0 suffix)
+        assert "dyn_func(a_0, b_0, output_0, TH, TW);" in wrapper
+
+    def test_dynamic_shape_shapes_extraction_in_wrapper(self):
+        func = _get_dyn_incore_func()
+        wrapper = _generate_kernel_wrapper(func, SAMPLE_PTOAS_OUTPUT)
+        assert "a_0_tensor->shapes[0]" in wrapper
+        assert "a_0_tensor->shapes[1]" in wrapper
+
 
 class TestGenerateSkipPtoas:
     """Tests for generate() with skip_ptoas=True."""
@@ -539,9 +617,12 @@ class TestGenerateSkipPtoas:
         @pl.program
         class SkipPtoasProgram:
             @pl.function(type=pl.FunctionType.InCore)
-            def skip_test(self, a: pl.Tensor[[32, 32], pl.FP32], b: pl.Tensor[[32, 32], pl.FP32]):
+            def skip_test(
+                self, a: pl.Tensor[[32, 32], pl.FP32], b: pl.Tensor[[32, 32], pl.FP32]
+            ) -> pl.Tensor[[32, 32], pl.FP32]:
                 tile = pl.load(a, offsets=[0, 0], shapes=[32, 32])
-                pl.store(tile, offsets=[0, 0], shapes=[32, 32], output_tensor=b)
+                out = pl.store(tile, offsets=[0, 0], output_tensor=b)
+                return out
 
         pm = PassManager.get_strategy(OptimizationStrategy.PTOAS)
         transformed_program = pm.run_passes(SkipPtoasProgram)

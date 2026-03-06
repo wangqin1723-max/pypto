@@ -56,8 +56,11 @@ struct PassProperties {
 
 | Pass | 所需 | 产生 | 失效 |
 | ---- | ---- | ---- | ---- |
+| UnrollLoops | TypeChecked | TypeChecked | — |
 | ConvertToSSA | TypeChecked | TypeChecked, SSAForm | NormalizedStmtStructure, FlattenedSingleStmt |
 | FlattenCallExpr | TypeChecked | TypeChecked, NoNestedCalls | NormalizedStmtStructure, FlattenedSingleStmt |
+| SplitChunkedLoops | TypeChecked, SSAForm | TypeChecked, SSAForm | — |
+| InterchangeChunkLoops | TypeChecked, SSAForm | TypeChecked, SSAForm | — |
 | NormalizeStmtStructure | TypeChecked | TypeChecked, NormalizedStmtStructure | FlattenedSingleStmt |
 | FlattenSingleStmt | TypeChecked | TypeChecked, FlattenedSingleStmt | NormalizedStmtStructure |
 | OutlineIncoreScopes | TypeChecked, SSAForm | SplitIncoreOrch | — |
@@ -210,7 +213,7 @@ with passes.PassContext([passes.VerificationInstrument(passes.VerificationMode.A
         result = some_pass(program)  # no verification
 ```
 
-### 测试夹具
+### 测试Fixture
 
 所有单元测试通过 `tests/ut/conftest.py` 自动在 BEFORE_AND_AFTER 验证模式下运行：
 
@@ -338,4 +341,4 @@ print(p.get_produced_properties())   # {SSAForm}
 - `tests/ut/ir/transforms/test_ir_property.py` — IRProperty/IRPropertySet 测试
 - `tests/ut/ir/transforms/test_pass_pipeline.py` — Pipeline、PassContext、插桩和自动验证测试
 - `tests/ut/ir/transforms/test_pass_manager.py` — PassManager 向后兼容性测试
-- `tests/ut/conftest.py` — 为所有测试启用 AFTER 验证的自动使用夹具
+- `tests/ut/conftest.py` — 为所有测试启用 BEFORE_AND_AFTER 验证的 autouse fixture

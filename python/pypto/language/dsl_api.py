@@ -45,6 +45,8 @@ class RangeIterator(Generic[T]):
         start: RangeArg = 0,
         step: RangeArg = 1,
         init_values: tuple[Any, ...] | None = None,
+        chunk: int | None = None,
+        chunk_policy: str = "leading_full",
     ):
         """Initialize range iterator.
 
@@ -53,11 +55,15 @@ class RangeIterator(Generic[T]):
             start: Start value (default 0, int or Scalar)
             step: Step value (default 1, int or Scalar)
             init_values: Initial values for iter_args
+            chunk: Chunk size for loop chunking (None = no chunking)
+            chunk_policy: Chunk distribution policy (default: "leading_full")
         """
         self.start = start
         self.stop = stop
         self.step = step
         self.init_values = init_values or ()
+        self.chunk = chunk
+        self.chunk_policy = chunk_policy
         self.current = start
 
     def __iter__(self) -> RangeIterator[T]:
@@ -112,57 +118,86 @@ class RangeIterator(Generic[T]):
 
 
 def _make_range_iterator(
-    *args: RangeArg, init_values: tuple[Any, ...] | None = None, func_name: str = "range"
+    *args: RangeArg,
+    init_values: tuple[Any, ...] | None = None,
+    chunk: int | None = None,
+    chunk_policy: str = "leading_full",
+    func_name: str = "range",
 ) -> RangeIterator[int] | RangeIterator[tuple[int, tuple[Any, ...]]]:
-    """Shared implementation for range() and parallel()."""
+    """Shared implementation for range(), parallel(), and unroll()."""
+    if chunk is not None and (not isinstance(chunk, int) or isinstance(chunk, bool) or chunk <= 0):
+        raise ValueError(f"{func_name}() chunk must be a positive integer, got {chunk!r}")
     if len(args) == 1:
-        return RangeIterator(args[0], init_values=init_values)
+        return RangeIterator(args[0], init_values=init_values, chunk=chunk, chunk_policy=chunk_policy)
     elif len(args) == 2:
-        return RangeIterator(args[1], args[0], init_values=init_values)
+        return RangeIterator(
+            args[1], args[0], init_values=init_values, chunk=chunk, chunk_policy=chunk_policy
+        )
     elif len(args) == 3:
-        return RangeIterator(args[1], args[0], args[2], init_values=init_values)
+        return RangeIterator(
+            args[1], args[0], args[2], init_values=init_values, chunk=chunk, chunk_policy=chunk_policy
+        )
     else:
         raise ValueError(f"{func_name}() takes 1 to 3 positional arguments")
 
 
 @overload
-def range(*args: RangeArg, init_values: None = None) -> RangeIterator[int]: ...
-
-
-@overload
-def range(*args: RangeArg, init_values: tuple[T1]) -> RangeIterator[tuple[int, tuple[T1]]]: ...
-
-
-@overload
-def range(*args: RangeArg, init_values: tuple[T1, T2]) -> RangeIterator[tuple[int, tuple[T1, T2]]]: ...
+def range(
+    *args: RangeArg, init_values: None = None, chunk: int | None = None, chunk_policy: str = "leading_full"
+) -> RangeIterator[int]: ...
 
 
 @overload
 def range(
-    *args: RangeArg, init_values: tuple[T1, T2, T3]
+    *args: RangeArg, init_values: tuple[T1], chunk: int | None = None, chunk_policy: str = "leading_full"
+) -> RangeIterator[tuple[int, tuple[T1]]]: ...
+
+
+@overload
+def range(
+    *args: RangeArg, init_values: tuple[T1, T2], chunk: int | None = None, chunk_policy: str = "leading_full"
+) -> RangeIterator[tuple[int, tuple[T1, T2]]]: ...
+
+
+@overload
+def range(
+    *args: RangeArg,
+    init_values: tuple[T1, T2, T3],
+    chunk: int | None = None,
+    chunk_policy: str = "leading_full",
 ) -> RangeIterator[tuple[int, tuple[T1, T2, T3]]]: ...
 
 
 @overload
 def range(
-    *args: RangeArg, init_values: tuple[T1, T2, T3, T4]
+    *args: RangeArg,
+    init_values: tuple[T1, T2, T3, T4],
+    chunk: int | None = None,
+    chunk_policy: str = "leading_full",
 ) -> RangeIterator[tuple[int, tuple[T1, T2, T3, T4]]]: ...
 
 
 @overload
 def range(
-    *args: RangeArg, init_values: tuple[T1, T2, T3, T4, T5]
+    *args: RangeArg,
+    init_values: tuple[T1, T2, T3, T4, T5],
+    chunk: int | None = None,
+    chunk_policy: str = "leading_full",
 ) -> RangeIterator[tuple[int, tuple[T1, T2, T3, T4, T5]]]: ...
 
 
 def range(
-    *args: RangeArg, init_values: tuple[Any, ...] | None = None
+    *args: RangeArg,
+    init_values: tuple[Any, ...] | None = None,
+    chunk: int | None = None,
+    chunk_policy: str = "leading_full",
 ) -> RangeIterator[int] | RangeIterator[tuple[int, tuple[Any, ...]]]:
     """Create a range iterator for for loops.
 
     Supports two patterns:
         Simple:    for i in pl.range(10):
         Iter args: for i, (var1, var2) in pl.range(16, init_values=(init1, init2)):
+        Chunked:   for i in pl.range(0, 10, chunk=5):
 
     Args can be int literals or Scalar variables:
         for i in pl.range(n):  # n is pl.Scalar[pl.INT64]
@@ -173,55 +208,68 @@ def range(
         *args: Positional arguments (stop) or (start, stop) or (start, stop, step).
             Each argument can be an int literal or a pl.Scalar value.
         init_values: Initial values for iteration arguments
+        chunk: Chunk size for loop chunking (splits loop into nested loops)
+        chunk_policy: Chunk distribution policy (default: "leading_full")
 
     Returns:
         If no init_values: RangeIterator yielding loop variable (int)
         If init_values: RangeIterator yielding (loop_var, (iter_args...))
-
-    Examples:
-        >>> for i in pl.range(10):
-        ...     result = pl.add(x, 1.0)
-        >>> for i in pl.range(n):  # n: pl.Scalar[pl.INT64]
-        ...     result = pl.add(x, 1.0)
-        >>> for i, (sum,) in pl.range(10, init_values=(0,)):
-        ...     sum = sum + i
-        ...     sum_out = pl.yield_(sum)
     """
-    return _make_range_iterator(*args, init_values=init_values, func_name="range")
-
-
-@overload
-def parallel(*args: RangeArg, init_values: None = None) -> RangeIterator[int]: ...
-
-
-@overload
-def parallel(*args: RangeArg, init_values: tuple[T1]) -> RangeIterator[tuple[int, tuple[T1]]]: ...
-
-
-@overload
-def parallel(*args: RangeArg, init_values: tuple[T1, T2]) -> RangeIterator[tuple[int, tuple[T1, T2]]]: ...
+    return _make_range_iterator(
+        *args, init_values=init_values, chunk=chunk, chunk_policy=chunk_policy, func_name="range"
+    )
 
 
 @overload
 def parallel(
-    *args: RangeArg, init_values: tuple[T1, T2, T3]
+    *args: RangeArg, init_values: None = None, chunk: int | None = None, chunk_policy: str = "leading_full"
+) -> RangeIterator[int]: ...
+
+
+@overload
+def parallel(
+    *args: RangeArg, init_values: tuple[T1], chunk: int | None = None, chunk_policy: str = "leading_full"
+) -> RangeIterator[tuple[int, tuple[T1]]]: ...
+
+
+@overload
+def parallel(
+    *args: RangeArg, init_values: tuple[T1, T2], chunk: int | None = None, chunk_policy: str = "leading_full"
+) -> RangeIterator[tuple[int, tuple[T1, T2]]]: ...
+
+
+@overload
+def parallel(
+    *args: RangeArg,
+    init_values: tuple[T1, T2, T3],
+    chunk: int | None = None,
+    chunk_policy: str = "leading_full",
 ) -> RangeIterator[tuple[int, tuple[T1, T2, T3]]]: ...
 
 
 @overload
 def parallel(
-    *args: RangeArg, init_values: tuple[T1, T2, T3, T4]
+    *args: RangeArg,
+    init_values: tuple[T1, T2, T3, T4],
+    chunk: int | None = None,
+    chunk_policy: str = "leading_full",
 ) -> RangeIterator[tuple[int, tuple[T1, T2, T3, T4]]]: ...
 
 
 @overload
 def parallel(
-    *args: RangeArg, init_values: tuple[T1, T2, T3, T4, T5]
+    *args: RangeArg,
+    init_values: tuple[T1, T2, T3, T4, T5],
+    chunk: int | None = None,
+    chunk_policy: str = "leading_full",
 ) -> RangeIterator[tuple[int, tuple[T1, T2, T3, T4, T5]]]: ...
 
 
 def parallel(
-    *args: RangeArg, init_values: tuple[Any, ...] | None = None
+    *args: RangeArg,
+    init_values: tuple[Any, ...] | None = None,
+    chunk: int | None = None,
+    chunk_policy: str = "leading_full",
 ) -> RangeIterator[int] | RangeIterator[tuple[int, tuple[Any, ...]]]:
     """Create a parallel range iterator for parallel for loops.
 
@@ -232,12 +280,46 @@ def parallel(
         *args: Positional arguments (stop) or (start, stop) or (start, stop, step).
             Each argument can be an int literal or a pl.Scalar value.
         init_values: Initial values for iteration arguments
+        chunk: Chunk size for loop chunking
+        chunk_policy: Chunk distribution policy (default: "leading_full")
 
     Returns:
         If no init_values: RangeIterator yielding loop variable (int)
         If init_values: RangeIterator yielding (loop_var, (iter_args...))
     """
-    return _make_range_iterator(*args, init_values=init_values, func_name="parallel")
+    return _make_range_iterator(
+        *args, init_values=init_values, chunk=chunk, chunk_policy=chunk_policy, func_name="parallel"
+    )
+
+
+def unroll(
+    *args: RangeArg,
+    chunk: int | None = None,
+    chunk_policy: str = "leading_full",
+) -> RangeIterator[int]:
+    """Create an unroll range iterator for compile-time loop unrolling.
+
+    Behaves identically to range() at runtime. The distinction is used by the
+    parser to emit ForKind.Unroll instead of ForKind.Sequential.
+
+    Unrolled loops do not support init_values (loop-carried state).
+
+    Args:
+        *args: Positional arguments (stop) or (start, stop) or (start, stop, step).
+            Each argument must be an int literal (compile-time constant).
+        chunk: Chunk size for loop chunking
+        chunk_policy: Chunk distribution policy (default: "leading_full")
+
+    Returns:
+        RangeIterator yielding loop variable (int)
+
+    Examples:
+        >>> for i in pl.unroll(4):
+        ...     x = pl.add(x, 1.0)
+        >>> for i in pl.unroll(0, 6, 2):
+        ...     x = pl.add(x, i)
+    """
+    return _make_range_iterator(*args, chunk=chunk, chunk_policy=chunk_policy, func_name="unroll")  # type: ignore[return-value]
 
 
 class WhileIterator(Generic[W]):
@@ -447,6 +529,39 @@ class IncoreContext:
         pass
 
 
+class AutoIncoreContext:
+    """Context manager for AutoInCore scope.
+
+    This is returned by pl.auto_incore() and used with the 'with' statement.
+    The parser recognizes this pattern and creates a ScopeStmt(AutoInCore).
+    """
+
+    def __enter__(self) -> None:
+        """Enter the AutoInCore scope context."""
+        pass
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Exit the AutoInCore scope context."""
+        pass
+
+
+def auto_incore() -> AutoIncoreContext:
+    """Mark a region of code for automatic incore chunking.
+
+    This function returns a context manager that should be used with the 'with' statement.
+    The parser recognizes this pattern and creates a ScopeStmt with ScopeKind.AutoInCore.
+
+    Returns:
+        Context manager for AutoInCore scope
+
+    Examples:
+        >>> with pl.auto_incore():
+        ...     for i in pl.parallel(0, 8, 1, chunk=4):
+        ...         x = pl.add(x, x)
+    """
+    return AutoIncoreContext()
+
+
 def incore() -> IncoreContext:
     """Mark a region of code as belonging to the InCore execution context.
 
@@ -468,13 +583,16 @@ __all__ = [
     "const",
     "range",
     "parallel",
+    "unroll",
     "while_",
     "yield_",
     "cond",
     "incore",
+    "auto_incore",
     "RangeIterator",
     "WhileIterator",
     "IncoreContext",
+    "AutoIncoreContext",
     "RangeArg",
     "CondArg",
 ]

@@ -81,9 +81,6 @@ class Op:
     name: Final[str]
     """Operation name."""
 
-    pipe: Final[PipeType | None]
-    """Pipeline type associated with this operation."""
-
     def __init__(self, name: str) -> None:
         """Create an operation with the given name.
 
@@ -645,9 +642,10 @@ class ParamDirection(enum.Enum):
 class ForKind(enum.Enum):
     """For loop kind classification.
 
-    Distinguishes sequential vs parallel for loops:
+    Distinguishes sequential, parallel, and unroll for loops:
     - Sequential: Standard sequential for loop (default)
     - Parallel: Parallel for loop
+    - Unroll: Compile-time unrolled for loop
     """
 
     Sequential = ...
@@ -655,6 +653,40 @@ class ForKind(enum.Enum):
 
     Parallel = ...
     """Parallel for loop."""
+
+    Unroll = ...
+    """Compile-time unrolled for loop."""
+
+class ChunkPolicy(enum.Enum):
+    """Chunk policy for loop chunking.
+
+    Controls how iterations are distributed across chunks.
+    """
+
+    LeadingFull = ...
+    """Full chunks first, smaller remainder at end."""
+
+class LoopOrigin(enum.Enum):
+    """Loop origin classification.
+
+    Tracks how a loop was generated:
+    - Original: Regular loop (default)
+    - ChunkOuter: Outer loop from chunk splitting
+    - ChunkInner: Inner loop from chunk splitting
+    - ChunkRemainder: Remainder loop from chunk splitting
+    """
+
+    Original = ...
+    """Regular loop (default)."""
+
+    ChunkOuter = ...
+    """Outer loop from chunk splitting."""
+
+    ChunkInner = ...
+    """Inner loop from chunk splitting."""
+
+    ChunkRemainder = ...
+    """Remainder loop from chunk splitting."""
 
 class MemorySpace(enum.Enum):
     """Memory space enumeration."""
@@ -1469,7 +1501,16 @@ class ForStmt(Stmt):
     """Return variables (can be empty)."""
 
     kind: Final[ForKind]
-    """Loop kind (Sequential or Parallel)."""
+    """Loop kind (Sequential, Parallel, or Unroll)."""
+
+    chunk_size: Final[Expr | None]
+    """Chunk size for loop chunking (None = no chunking)."""
+
+    chunk_policy: Final[ChunkPolicy]
+    """Chunk distribution policy."""
+
+    loop_origin: Final[LoopOrigin]
+    """Loop origin (Original, ChunkOuter, ChunkInner, or ChunkRemainder)."""
 
     def __init__(
         self,
@@ -1482,6 +1523,9 @@ class ForStmt(Stmt):
         return_vars: list[Var],
         span: Span,
         kind: ForKind = ForKind.Sequential,
+        chunk_size: Expr | None = None,
+        chunk_policy: ChunkPolicy = ChunkPolicy.LeadingFull,
+        loop_origin: LoopOrigin = LoopOrigin.Original,
     ) -> None:
         """Create a for loop statement.
 
@@ -1495,6 +1539,9 @@ class ForStmt(Stmt):
             return_vars: Return variables (can be empty)
             span: Source location
             kind: Loop kind (default: Sequential)
+            chunk_size: Optional chunk size for loop chunking
+            chunk_policy: Chunk distribution policy (default: LeadingFull)
+            loop_origin: Loop origin classification (default: Original)
         """
 
 class WhileStmt(Stmt):
@@ -1535,6 +1582,9 @@ class ScopeKind(enum.Enum):
 
     InCore = 0
     """InCore scope for AICore sub-graphs."""
+
+    AutoInCore = 1
+    """AutoInCore scope for automatic chunking."""
 
 class ScopeStmt(Stmt):
     """Scope statement: marks a region with specific execution context."""
@@ -2101,6 +2151,9 @@ class IRBuilder:
         step: Expr,
         span: Span,
         kind: ForKind = ForKind.Sequential,
+        chunk_size: Expr | None = None,
+        chunk_policy: ChunkPolicy = ChunkPolicy.LeadingFull,
+        loop_origin: LoopOrigin = LoopOrigin.Original,
     ) -> None:
         """Begin building a for loop.
 
@@ -2111,6 +2164,9 @@ class IRBuilder:
             step: Step value expression
             span: Source location for loop definition
             kind: Loop kind (default: Sequential)
+            chunk_size: Optional chunk size for loop chunking
+            chunk_policy: Chunk distribution policy (default: LeadingFull)
+            loop_origin: Loop origin classification (default: Original)
         """
 
     def add_iter_arg(self, iter_arg: IterArg) -> None:

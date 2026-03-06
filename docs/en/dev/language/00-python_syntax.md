@@ -193,22 +193,40 @@ else:
 ### For Loop (SSA-style with iter_args)
 
 ```python
-# Simple loop
-for i in pl.range(start, stop, step):
-    body_statements
+# Simple loop (1-3 positional args, like Python's range())
+for i in pl.range(stop):                    # start=0, step=1
+for i in pl.range(start, stop):             # step=1
+for i in pl.range(start, stop, step):       # explicit
 
 # Loop with iter_args (loop-carried values)
 sum_init: pl.INT64 = 0
-for i, (sum,) in pl.range(0, n, 1, init_values=(sum_init,)):
+for i, (sum,) in pl.range(n, init_values=(sum_init,)):
     sum = pl.yield_(sum + i)
 sum_final = sum
 
-# Parallel for loop
+# Parallel for loop (same 1-3 arg forms)
+for i in pl.parallel(stop):
 for i in pl.parallel(start, stop, step):
     body_statements
 ```
 
 **Key points:** Loop-carried values use `pl.range()` or `pl.parallel()` with `init_values`, tuple unpacking `(sum,)` declares iter_args, `pl.yield_()` updates values for next iteration, after loop iter_args contain final values. `pl.parallel()` produces a `ForKind.Parallel` loop while `pl.range()` produces `ForKind.Sequential` (default).
+
+#### Chunked Loops
+
+```python
+# Split loop into chunks of C iterations (nested outer/inner loops)
+for i in pl.range(10, chunk=5):
+    body_statements
+
+for i in pl.parallel(8, chunk=4):
+    body_statements
+
+for i in pl.unroll(12, chunk=4):
+    body_statements
+```
+
+**Key points:** `chunk=C` splits the loop into an outer sequential loop and an inner loop of `C` iterations. The inner loop preserves the original kind (Sequential/Parallel/Unroll). `chunk` cannot be combined with `init_values`. See [SplitChunkedLoops Pass](../passes/11-split_chunked_loops.md).
 
 ### Yield Statement
 
@@ -297,7 +315,7 @@ import pypto.language as pl
 
 def loop_sum(n: pl.INT64) -> pl.INT64:
     sum_init: pl.INT64 = 0
-    for i, (sum,) in pl.range(0, n, 1, init_values=(sum_init,)):
+    for i, (sum,) in pl.range(n, init_values=(sum_init,)):
         sum = pl.yield_(sum + i)
     return sum
 ```
@@ -319,7 +337,7 @@ class BlockExample:
         tile_a: pl.Tile[[64, 64], pl.FP32] = pl.load(input_a, [0, 0], [64, 64])
         tile_b: pl.Tile[[64, 64], pl.FP32] = pl.load(input_b, [0, 0], [64, 64])
         tile_c: pl.Tile[[64, 64], pl.FP32] = pl.add(tile_a, tile_b)
-        result: pl.Tensor[[64, 64], pl.FP32] = pl.store(tile_c, [0, 0], [64, 64], output)
+        result: pl.Tensor[[64, 64], pl.FP32] = pl.store(tile_c, [0, 0], output)
         return result
 ```
 
@@ -337,7 +355,7 @@ else:
 
 # For: loop-carried values via iter_args
 sum_init: pl.INT64 = 0
-for i, (sum,) in pl.range(0, 10, 1, init_values=(sum_init,)):
+for i, (sum,) in pl.range(10, init_values=(sum_init,)):
     sum = pl.yield_(sum + i)
 sum_final: pl.INT64 = sum  # captures final value
 ```

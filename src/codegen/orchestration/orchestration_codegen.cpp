@@ -22,8 +22,6 @@
 #include <utility>
 #include <vector>
 
-#include "pypto/backend/common/backend.h"
-#include "pypto/backend/common/backend_config.h"
 #include "pypto/codegen/codegen_base.h"
 #include "pypto/codegen/orchestration_op_registry.h"
 #include "pypto/core/dtype.h"
@@ -56,22 +54,22 @@ using namespace pypto::ir;  // NOLINT(build/namespaces)
  * Used to match input args with output vars for inout parameter detection.
  */
 std::string GetSSABaseName(const std::string& name) {
+  // Helper to check if a string is all digits
+  auto is_all_digits = [](const std::string& s) {
+    return !s.empty() && std::all_of(s.begin(), s.end(), ::isdigit);
+  };
+
   // Check for iter_arg pattern: "{base}_iter_{version}"
   size_t iter_pos = name.rfind("_iter_");
-  if (iter_pos != std::string::npos) {
-    std::string suffix = name.substr(iter_pos + 6);
-    if (!suffix.empty() && std::all_of(suffix.begin(), suffix.end(), ::isdigit)) {
-      return name.substr(0, iter_pos);
-    }
+  if (iter_pos != std::string::npos && is_all_digits(name.substr(iter_pos + 6))) {
+    return name.substr(0, iter_pos);
   }
 
   // Check for regular var pattern: "{base}_{version}"
   size_t last_underscore = name.rfind('_');
-  if (last_underscore != std::string::npos && last_underscore > 0) {
-    std::string suffix = name.substr(last_underscore + 1);
-    if (!suffix.empty() && std::all_of(suffix.begin(), suffix.end(), ::isdigit)) {
-      return name.substr(0, last_underscore);
-    }
+  if (last_underscore != std::string::npos && last_underscore > 0 &&
+      is_all_digits(name.substr(last_underscore + 1))) {
+    return name.substr(0, last_underscore);
   }
 
   return name;
@@ -100,13 +98,10 @@ bool IsTensorOp(const std::string& op_name) { return op_name.find("tensor.") == 
 // Format scalar constant as C++ literal/expression for assignment to the given C++ type.
 std::string FormatConstIntValue(const ConstIntPtr& c, const std::string& cpp_type) {
   int64_t v = c->value_;
-  if (cpp_type == "uint8_t" || cpp_type == "uint16_t" || cpp_type == "uint32_t" || cpp_type == "uint64_t") {
+  if (cpp_type != "int64_t") {
     return "static_cast<" + cpp_type + ">(" + std::to_string(v) + ")";
   }
-  if (cpp_type == "int8_t" || cpp_type == "int16_t" || cpp_type == "int32_t") {
-    return "static_cast<" + cpp_type + ">(" + std::to_string(v) + ")";
-  }
-  return std::to_string(v);  // int64_t
+  return std::to_string(v);
 }
 
 std::string FormatConstFloatValue(const ConstFloatPtr& c, const std::string& cpp_type) {
@@ -300,43 +295,37 @@ class OrchestrationInfoCollector : public IRVisitor {
 }  // namespace
 
 CoreType InferFunctionCoreType(const FunctionPtr& func) {
-  const backend::Backend* backend = backend::GetBackend();
   class CoreTypeCollector : public IRVisitor {
    public:
-    explicit CoreTypeCollector(const backend::Backend* backend) : backend_(backend) {}
-    std::set<PipeType> pipe_types_;
+    bool has_cube_ = false;
+    bool has_vector_ = false;
 
     void VisitExpr_(const CallPtr& call) override {
-      if (call->op_->GetPipe().has_value()) {
-        pipe_types_.insert(*call->op_->GetPipe());  // NOLINT(bugprone-unchecked-optional-access)
-      } else if (backend_ != nullptr) {
-        const auto* info = backend_->GetOpInfo(call->op_->name_);
-        if (info) {
-          pipe_types_.insert(info->pipe);
+      for (const auto& arg : call->args_) {
+        if (auto tile = As<TileType>(arg->GetType())) {
+          if (tile->memref_.has_value()) {
+            auto space = (*tile->memref_)->memory_space_;
+            if (IsCubeMemorySpace(space)) {
+              has_cube_ = true;
+            } else if (space == MemorySpace::Vec) {
+              has_vector_ = true;
+            }
+          }
         }
       }
       IRVisitor::VisitExpr_(call);
     }
-
-   private:
-    const backend::Backend* backend_;
   };
 
-  CoreTypeCollector collector(backend);
+  CoreTypeCollector collector;
   collector.VisitStmt(func->body_);
 
-  bool has_m = collector.pipe_types_.count(PipeType::M) > 0;
-  bool has_v = collector.pipe_types_.count(PipeType::V) > 0;
+  CHECK(!(collector.has_cube_ && collector.has_vector_))
+      << "Function " << func->name_ << " contains both CUBE and VECTOR memory spaces. "
+      << "A function can only use one core type.";
 
-  CHECK(!(has_m && has_v)) << "Function " << func->name_
-                           << " contains both Matrix (M) and Vector (V) pipe types. "
-                           << "A function can only use one core type (CUBE or VECTOR).";
-
-  if (has_m) {
+  if (collector.has_cube_) {
     return CoreType::CUBE;
-  }
-  if (has_v) {
-    return CoreType::VECTOR;
   }
   return CoreType::VECTOR;
 }
@@ -508,6 +497,11 @@ class OrchestrationStmtCodegen : public CodegenBase {
   }
 
   void VisitStmt_(const ForStmtPtr& for_stmt) override {
+    if (for_stmt->kind_ == ForKind::Unroll) {
+      LOG_WARN << "ForKind::Unroll loop was not expanded before codegen; "
+                  "generating sequential loop as fallback";
+    }
+
     std::string loop_var = GetSSABaseName(for_stmt->loop_var_->name_);
     std::string start_expr = GenerateExprString(for_stmt->start_);
     std::string stop_expr = GenerateExprString(for_stmt->stop_);
@@ -866,7 +860,8 @@ OrchestrationResult GenerateOrchestration(const ir::ProgramPtr& program, const i
   // 6. Entry function
   oss << "__attribute__((visibility(\"default\")))\n";
   oss << "void aicpu_orchestration_entry(PTO2Runtime* rt, uint64_t* args, int arg_count) {\n";
-  oss << "    (void)arg_count;\n\n";
+  oss << "    (void)arg_count;\n";
+  oss << "    pto2_rt_init_tensor_pool(rt);  // Initialize TensorPool singleton\n\n";
 
   // 7. Extract arguments
   oss << "    // Extract device pointers\n";
@@ -902,19 +897,29 @@ OrchestrationResult GenerateOrchestration(const ir::ProgramPtr& program, const i
       oss << GenerateMakeTensorExternal(name, "arg_" + name + "_ptr", tensor_type, stmt_codegen);
     }
   }
-  for (size_t i = 0; i < unique_return_vars.size(); ++i) {
-    const auto& name = unique_return_vars[i];
-    // Resolve TensorType for return vars
+  for (const auto& name : unique_return_vars) {
+    // Resolve TensorType for return vars.
+    // Prefer the orchestrator's declared return type: it always reflects the concrete
+    // buffer shape passed by the runtime, even when the return var was last assigned
+    // from an InCore call whose return type may contain dynamic dim variables (e.g. M).
+    //
+    // Use the var's position in return_vars (not unique_return_vars) as the index into
+    // func->return_types_, because inplace vars (params that are also returned) are
+    // excluded from unique_return_vars but still occupy slots in return_types_.
     TensorTypePtr ret_tensor_type;
-    if (info_collector.output_tensor_assigns.count(name)) {
-      ret_tensor_type = GetIntermediateTensorType(program, info_collector.output_tensor_assigns,
-                                                  info_collector.tuple_element_map, name);
-    } else {
-      // Return var from function return type
-      size_t ret_idx = i;
+    auto ret_pos = std::find(return_vars.begin(), return_vars.end(), name);
+    INTERNAL_CHECK(ret_pos != return_vars.end())
+        << "Internal error: return var '" << name << "' not found in return_vars";
+    {
+      size_t ret_idx = static_cast<size_t>(ret_pos - return_vars.begin());
       if (ret_idx < func->return_types_.size()) {
         ret_tensor_type = As<TensorType>(func->return_types_[ret_idx]);
       }
+    }
+    // Fallback: infer from the assignment (e.g., tensor.create without a concrete return type)
+    if (!ret_tensor_type && info_collector.output_tensor_assigns.count(name)) {
+      ret_tensor_type = GetIntermediateTensorType(program, info_collector.output_tensor_assigns,
+                                                  info_collector.tuple_element_map, name);
     }
     CHECK(ret_tensor_type) << "Cannot resolve TensorType for return variable: " << name;
     oss << GenerateMakeTensorExternal(name, "arg_" + name + "_ptr", ret_tensor_type, stmt_codegen);

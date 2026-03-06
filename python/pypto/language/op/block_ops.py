@@ -14,15 +14,14 @@ that accept and return Tile types instead of raw Expr/Call objects.
 """
 
 from collections.abc import Sequence
-from typing import Literal, overload
+from typing import overload
 
 __all__ = [
     "create_tile",
+    "create",
     "load",
     "store",
-    "l0c_store",
     "move",
-    "vec_move",
     "full",
     "fillpad",
     "get_block_idx",
@@ -135,19 +134,27 @@ def create_tile(
     return Tile(expr=call_expr)
 
 
+create = create_tile
+
+
 def load(
     tensor: Tensor,
     offsets: Sequence[IntLike],
     shapes: Sequence[IntLike],
     target_memory: MemorySpace = MemorySpace.Vec,
+    valid_shapes: Sequence[IntLike] | None = None,
 ) -> Tile:
     """Copy data from tensor to unified buffer (tile).
 
     Args:
         tensor: Source tensor
         offsets: Offsets in each dimension
-        sizes: Shape of the tile in each dimension
+        shapes: Shape of the tile in each dimension
         target_memory: Target memory space (MemorySpace.Vec default, or MemorySpace.Mat)
+        valid_shapes: Valid shape of the tile in each dimension. When provided, sets
+            TileView.valid_shape in the output TileType. When omitted, shapes is used
+            as valid_shape. Useful for dynamic shapes where the actual valid data region
+            differs from the allocated tile size.
 
     Returns:
         Tile wrapping the load operation
@@ -155,11 +162,19 @@ def load(
     Example:
         >>> # 2D load
         >>> tile = load(tensor, offsets=[0, 0], shapes=[32, 32])
+        >>> # 2D load with dynamic valid_shapes
+        >>> tile = load(tensor, offsets=[0, 0], shapes=[128, 128], valid_shapes=[M, N])
         >>> # 3D load
         >>> tile = load(tensor, offsets=[0, 0, 0], shapes=[8, 16, 32])
     """
+    if valid_shapes is None:
+        valid_shapes = shapes
     call_expr = _ir_ops.load(
-        tensor.unwrap(), _normalize_intlike(offsets), _normalize_intlike(shapes), target_memory
+        tensor.unwrap(),
+        _normalize_intlike(offsets),
+        _normalize_intlike(shapes),
+        _normalize_intlike(valid_shapes),
+        target_memory,
     )
     return Tile(expr=call_expr)
 
@@ -167,7 +182,6 @@ def load(
 def store(
     tile: Tile,
     offsets: Sequence[IntLike],
-    shapes: Sequence[IntLike],
     output_tensor: Tensor,
 ) -> Tensor:
     """Copy data from tile back to tensor.
@@ -175,7 +189,6 @@ def store(
     Args:
         tile: Source tile
         offsets: Offsets in each dimension
-        sizes: Shape of the tile in each dimension
         output_tensor: Output tensor
 
     Returns:
@@ -183,42 +196,11 @@ def store(
 
     Example:
         >>> # 2D store
-        >>> result = store(tile, offsets=[0, 0], shapes=[32, 32], output_tensor=tensor)
+        >>> result = store(tile, offsets=[0, 0], output_tensor=tensor)
         >>> # 3D store
-        >>> result = store(tile, offsets=[0, 0, 0], shapes=[8, 16, 32], output_tensor=tensor)
+        >>> result = store(tile, offsets=[0, 0, 0], output_tensor=tensor)
     """
-    call_expr = _ir_ops.store(
-        tile.unwrap(), _normalize_intlike(offsets), _normalize_intlike(shapes), output_tensor.unwrap()
-    )
-    return Tensor(expr=call_expr)
-
-
-def l0c_store(
-    tile: Tile,
-    offsets: Sequence[IntLike],
-    shapes: Sequence[IntLike],
-    output_tensor: Tensor,
-) -> Tensor:
-    """Copy data from Acc tile to GM tensor.
-
-    Args:
-        tile: Source tile
-        offsets: Offsets in each dimension
-        sizes: Shape of the tile in each dimension
-        output_tensor: Output tensor
-
-    Returns:
-        Tensor wrapping the l0c_store operation
-
-    Example:
-        >>> # 2D l0c_store
-        >>> result = l0c_store(tile, offsets=[0, 0], shapes=[32, 32], output_tensor=tensor)
-        >>> # 3D l0c_store
-        >>> result = l0c_store(tile, offsets=[0, 0, 0], shapes=[8, 16, 32], output_tensor=tensor)
-    """
-    call_expr = _ir_ops.l0c_store(
-        tile.unwrap(), _normalize_intlike(offsets), _normalize_intlike(shapes), output_tensor.unwrap()
-    )
+    call_expr = _ir_ops.store(tile.unwrap(), _normalize_intlike(offsets), output_tensor.unwrap())
     return Tensor(expr=call_expr)
 
 
@@ -234,23 +216,6 @@ def move(tile: Tile, target_memory: MemorySpace, transpose: bool = False) -> Til
         Tile wrapping the move operation
     """
     call_expr = _ir_ops.move(tile.unwrap(), target_memory, transpose)
-    return Tile(expr=call_expr)
-
-
-def vec_move(tile: Tile) -> Tile:
-    """Copy tile within Vec (vector/unified buffer) memory.
-
-    This is a specialized operation for copying tiles within Vec memory (Vec→Vec).
-    Both source and destination must be on Vec. For other memory transfers,
-    use move() with the target_memory parameter.
-
-    Args:
-        tile: Input tile (must be in Vec memory)
-
-    Returns:
-        Tile wrapping the vec_move operation (result is in Vec memory)
-    """
-    call_expr = _ir_ops.vec_move(tile.unwrap())
     return Tile(expr=call_expr)
 
 
@@ -524,14 +489,15 @@ def relu(tile: Tile) -> Tile:
 def cast(
     tile: Tile,
     target_type: int | DataType,
-    mode: Literal["none", "rint", "round", "floor", "ceil", "trunc", "odd"] = "round",
+    mode: str | int = "round",
 ) -> Tile:
     """Cast tile to target data type (element-wise).
 
     Args:
         tile: Input tile (TileType)
         target_type: Target data type (DataType)
-        mode: Round Mode: None(0), RINT(1), ROUND(2), FLOOR(3), CEIL(4), TRUNC(5), ODD(6)
+        mode: Rounding mode — string name ("none", "rint", "round", "floor",
+              "ceil", "trunc", "odd") or int (0–6)
 
     Returns:
         Tile wrapping the cast operation
@@ -925,7 +891,11 @@ def min(tile: Tile, axis: int, keepdim: bool = False) -> Tile: ...
 def min(tile: Scalar, axis: Scalar | int, keepdim: bool = False) -> Scalar: ...
 
 
-def min(tile: Tile | Scalar, axis: int | Scalar = 0, keepdim: bool = False) -> Tile | Scalar:
+@overload
+def min(tile: int, axis: Scalar | int, keepdim: bool = False) -> Scalar: ...
+
+
+def min(tile: Tile | Scalar | int, axis: int | Scalar = 0, keepdim: bool = False) -> Tile | Scalar:
     """Min reduction along specified axis, or scalar min of two values.
 
     Args:
@@ -936,13 +906,18 @@ def min(tile: Tile | Scalar, axis: int | Scalar = 0, keepdim: bool = False) -> T
     Returns:
         Tile or Scalar wrapping the min operation
     """
-    if isinstance(tile, Scalar):
+    if isinstance(tile, (Scalar, int)):
+        lhs: Expr = (
+            tile.unwrap()
+            if isinstance(tile, Scalar)
+            else _ir_core.ConstInt(tile, DataType.INT32, _ir_core.Span.unknown())
+        )
         rhs: Expr = (
             axis.unwrap()
             if isinstance(axis, Scalar)
             else _ir_core.ConstInt(axis, DataType.INT32, _ir_core.Span.unknown())
         )
-        return Scalar(expr=_ir_core.min_(tile.unwrap(), rhs))
+        return Scalar(expr=_ir_core.min_(lhs, rhs))
     assert isinstance(axis, int)
     call_expr = _ir_ops.min(tile.unwrap(), axis, keepdim)
     return Tile(expr=call_expr)

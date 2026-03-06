@@ -104,12 +104,12 @@ op = ir.Op("my_function"); call = ir.Call(op, [x, y], span)  # External
 gvar = ir.GlobalVar("helper"); call = ir.Call(gvar, [x], span)  # Internal
 ```
 
-### IterArg - 循环传递值
+### IterArg - 循环携带值
 
 `IterArg` 扩展 `Var`，添加 `initValue_` 以支持静态单赋值 (SSA) 风格的循环。作用域限定在循环体内，通过 `yield` 更新，最终值存储在 `return_vars` 中。
 
 ```python
-# for i, (sum,) in pl.range(0, n, 1, init_values=(0,)): sum = pl.yield_(sum + i)
+# for i, (sum,) in pl.range(n, init_values=(0,)): sum = pl.yield_(sum + i)
 sum_iter = ir.IterArg("sum", ir.ScalarType(DataType.INT64), init_val, span)
 for_stmt = ir.ForStmt(i, start, stop, step, [sum_iter], body, [sum_final], span)
 ```
@@ -133,12 +133,14 @@ for_stmt = ir.ForStmt(i, start, stop, step, [sum_iter], body, [sum_final], span)
 ### ForStmt 详细说明
 
 ```python
-# Without iter_args: for i in range(0, 10, 1): x = x + i
+# Without iter_args: for i in pl.range(10): x = x + i
 for_stmt = ir.ForStmt(i, start, stop, step, [], body, [], span)
 
-# With iter_args: for i, (sum,) in pl.range(0, 10, 1, init_values=(0,)): sum = pl.yield_(sum + i)
+# With iter_args: for i, (sum,) in pl.range(10, init_values=(0,)): sum = pl.yield_(sum + i)
 for_stmt = ir.ForStmt(i, start, stop, step, [sum_iter], body, [sum_final], span)
 ```
+
+> **注意:** DSL 接受简写形式 `pl.range(stop)` / `pl.range(start, stop)` 作为语法糖（类似 Python 的 `range()`）。IR 始终存储三个字段（`start_`、`stop_`、`step_`）；解析器填充默认值（start=0, step=1），打印器在匹配时省略它们。
 
 ### WhileStmt 详细说明
 
@@ -182,11 +184,11 @@ scope_stmt = ir.ScopeStmt(ir.ScopeKind.InCore, body, span)
 **并行 for 循环 (ForKind)：**
 
 ```python
-# for i in pl.parallel(0, 10, 1): ...
+# for i in pl.parallel(10): ...
 for_stmt = ir.ForStmt(i, start, stop, step, [], body, [], span, ir.ForKind.Parallel)
 ```
 
-`kind_` 字段（`ForKind` 枚举）区分顺序执行（`ForKind.Sequential`，默认）和并行执行（`ForKind.Parallel`）的循环。在 DSL 中，`pl.range()` 生成顺序循环，`pl.parallel()` 生成并行循环。打印器对并行类型输出 `pl.parallel(...)`。
+`kind_` 字段（`ForKind` 枚举）区分顺序执行（`ForKind.Sequential`，默认）、并行执行（`ForKind.Parallel`）和编译时展开（`ForKind.Unroll`）的循环。在 DSL 中，`pl.range()` 生成顺序循环，`pl.parallel()` 生成并行循环，`pl.unroll()` 生成编译时展开循环。打印器相应输出 `pl.parallel(...)` 或 `pl.unroll(...)`。
 
 **要求：**
 
@@ -203,7 +205,7 @@ for_stmt = ir.ForStmt(i, start, stop, step, [], body, [], span, ir.ForKind.Paral
 | **TensorType** | `shape_`, `dtype_`, `memref_`（可选） | 多维张量 (Tensor) |
 | **TileType** | `shape_`, `dtype_`, `memref_`（可选）, `tile_view_`（可选） | 统一缓冲区中的 Tile |
 | **TupleType** | `types_` | 类型元组 |
-| **PipeType** | `pipe_kind_` | 硬件管线/屏障 |
+| **PipeType** | `pipe_kind_` | 硬件流水线/屏障 |
 | **UnknownType** | - | 未知或推断类型 |
 
 ### 内存引用 (MemRef)

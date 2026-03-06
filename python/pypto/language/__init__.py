@@ -30,7 +30,7 @@ Typical usage:
     def block_func(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
         tile: pl.Tile[[64, 64], pl.FP32] = pl.load(x, [0, 0], [64, 64])
         result: pl.Tile[[64, 64], pl.FP32] = pl.add(tile, tile)
-        return pl.store(result, [0, 0], [64, 64], x)
+        return pl.store(result, [0, 0], x)
 
     @pl.function
     def scalar_func(x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
@@ -41,7 +41,7 @@ from pypto.pypto_core import DataType
 from pypto.pypto_core.ir import ForKind, FunctionType, MemorySpace, MemRef, PipeType, TensorLayout
 
 from . import parser
-from .dsl_api import cond, const, incore, parallel, range, while_, yield_
+from .dsl_api import auto_incore, cond, const, incore, parallel, range, unroll, while_, yield_
 from .op import block_ops as block
 from .op import system_ops as system
 from .op import tensor_ops as tensor
@@ -62,7 +62,6 @@ from .op.block_ops import (
     gemv,
     gemv_acc,
     gemv_bias,
-    l0c_store,
     load,
     log,
     lrelu,
@@ -101,7 +100,6 @@ from .op.block_ops import (
     subc,
     subsc,
     sum,
-    vec_move,
     xor,
     xors,
 )
@@ -173,10 +171,12 @@ __all__ = [
     "const",
     "range",
     "parallel",
+    "unroll",
     "while_",
     "yield_",
     "cond",
     "incore",
+    "auto_incore",
     "block",
     "system",
     "tensor",
@@ -198,9 +198,7 @@ __all__ = [
     "create_tile",
     "load",
     "store",
-    "l0c_store",
     "move",
-    "vec_move",
     "neg",
     "sqrt",
     "rsqrt",

@@ -16,7 +16,7 @@ or ``pl.block.add``.
 """
 
 from collections.abc import Sequence
-from typing import Literal, TypeVar, overload
+from typing import TypeVar, overload
 
 __all__ = [
     "add",
@@ -35,6 +35,7 @@ __all__ = [
     "create_tile",
 ]
 
+from pypto.ir.utils import resolve_cast_mode
 from pypto.pypto_core import DataType
 from pypto.pypto_core.ir import MemorySpace
 
@@ -226,17 +227,48 @@ def row_sum(input: T, tmp_tile: Tile | None = None) -> T:
     raise TypeError(f"row_sum: expected Tensor or Tile, got {type(input).__name__}")
 
 
+@overload
 def cast(
-    input: T,
+    input: Tensor,
     target_type: int | DataType,
-    mode: Literal["none", "rint", "round", "floor", "ceil", "trunc", "odd"] = "round",
-) -> T:
+    mode: str | int = "round",
+) -> Tensor: ...
+
+
+@overload
+def cast(
+    input: Tile,
+    target_type: int | DataType,
+    mode: str | int = "round",
+) -> Tile: ...
+
+
+@overload
+def cast(
+    input: Scalar,
+    target_type: int | DataType,
+    mode: str | int = "round",
+) -> Scalar: ...
+
+
+def cast(
+    input: Tensor | Tile | Scalar,
+    target_type: int | DataType,
+    mode: str | int = "round",
+) -> Tensor | Tile | Scalar:
     """Type casting, dispatched by input type."""
     if isinstance(input, Tensor):
         return _tensor.cast(input, target_type, mode)
     if isinstance(input, Tile):
         return _block.cast(input, target_type, mode)
-    raise TypeError(f"cast: expected Tensor or Tile, got {type(input).__name__}")
+    if isinstance(input, Scalar):
+        if resolve_cast_mode(mode) != 2:
+            raise ValueError(f"cast: Scalar inputs do not support non-default mode, got mode={mode!r}")
+        from pypto.pypto_core import ir as _ir_core  # noqa: PLC0415
+
+        dtype = DataType(target_type) if isinstance(target_type, int) else target_type
+        return Scalar(expr=_ir_core.cast(input.unwrap(), dtype))
+    raise TypeError(f"cast: expected Tensor, Tile, or Scalar, got {type(input).__name__}")
 
 
 # ---------------------------------------------------------------------------

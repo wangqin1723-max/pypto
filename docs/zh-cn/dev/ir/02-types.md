@@ -17,7 +17,7 @@ float_type = ir.ScalarType(DataType.FP32)
 
 **支持的 DataType：** INT8, INT16, INT32, INT64, UINT8, UINT16, UINT32, UINT64, FP16, FP32, FP64, BOOL, INDEX
 
-> **注意：** `INDEX` 是 `INT64` 的语义别名，用于索引计算（循环变量、维度、偏移量、步长）。`INDEX == INT64` 为 `true` -- 它们共享相同的类型代码和字符串表示。
+> **注意：** `INDEX` 是用于索引计算（循环变量、维度、偏移量、步长）的独立整数类型。它拥有自己的类型代码和字符串表示（`"index"`）。虽然语义上与 `INT64` 类似，但 `INDEX != INT64` —— 它们是不同的类型。在代码生成中，INDEX 和 INT64 之间的隐式类型转换会被抑制。
 
 ### TensorType
 
@@ -109,7 +109,7 @@ nested = ir.TupleType([
 
 ### PipeType
 
-硬件执行管线或同步屏障。
+硬件执行流水线或同步屏障。
 
 ```python
 pipe_s = ir.PipeType(ir.PipeType.S)    # Scalar pipe
@@ -211,7 +211,7 @@ abs_stmt = ir.IfStmt(condition, then_assign, else_assign, [result], span)
 ### 示例 3：带累加的循环
 
 ```python
-# for i, (sum,) in pl.range(0, n, 1, init_values=(0,)):
+# for i, (sum,) in pl.range(n, init_values=(0,)):
 #     sum = pl.yield_(sum + i)
 
 n = ir.Var("n", ir.ScalarType(dtype), span)
@@ -352,7 +352,7 @@ PyPTO 的类型系统提供：
 - **标量类型** 用于原始值
 - **张量/Tile 类型** 用于带内存布局的多维数据
 - **元组类型** 用于异构集合
-- **管线类型** 用于硬件同步
+- **流水线类型** 用于硬件同步
 
 IR 构建 API 支持：
 
@@ -360,4 +360,4 @@ IR 构建 API 支持：
 - 带编译时检查的类型安全操作
 - 通过 MemRef 和 TileView 实现硬件感知的内存管理
 - 通过 GlobalVar 实现程序内函数调用
-- 通过 IterArg 实现循环传递依赖
+- 通过 IterArg 实现循环携带依赖

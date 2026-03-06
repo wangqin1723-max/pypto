@@ -15,13 +15,13 @@ unary operations, and reduction operations.
 """
 
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Any
 
 from pypto.pypto_core import DataType
 from pypto.pypto_core import ir as _ir_core
 from pypto.pypto_core.ir import Call, ConstFloat, ConstInt, Expr, MemorySpace, Span
 
-from ..utils import _get_span_or_capture, _normalize_expr, _to_make_tuple
+from ..utils import _get_span_or_capture, _normalize_expr, _to_make_tuple, resolve_cast_mode
 
 
 def _validate_offsets_shapes(offsets_tuple: _ir_core.MakeTuple, shapes_tuple: _ir_core.MakeTuple) -> None:
@@ -71,10 +71,14 @@ def create_tile(
     return _ir_core.create_op_call("block.create_tile", [shape_tuple], kwargs, actual_span)
 
 
+create = create_tile
+
+
 def load(
     tensor: Expr,
     offsets: Sequence[int | Expr] | _ir_core.MakeTuple,
     shapes: Sequence[int | Expr] | _ir_core.MakeTuple,
+    valid_shapes: Sequence[int | Expr] | _ir_core.MakeTuple | None = None,
     target_memory: MemorySpace = MemorySpace.Vec,
     span: Span | None = None,
 ) -> Call:
@@ -84,6 +88,10 @@ def load(
         tensor: Source tensor (TensorType)
         offsets: Offsets in each dimension (sequence of scalars), or a MakeTuple
         shapes: Shape of the tile in each dimension (sequence of scalars), or a MakeTuple
+        valid_shapes: Valid shape of the tile in each dimension (sequence of scalars), or a
+            MakeTuple. When provided, sets TileView.valid_shape in the output TileType.
+            When omitted, shapes is used as valid_shape. Useful for dynamic shapes where
+            the actual valid data region differs from the allocated tile size.
         target_memory: Target memory space (MemorySpace.Vec default, or MemorySpace.Mat)
         span: Optional source span for debugging (auto-captured if not provided)
 
@@ -93,6 +101,8 @@ def load(
     Example:
         >>> # 2D load
         >>> tile = load(tensor, offsets=[0, 0], shapes=[32, 32])
+        >>> # 2D load with dynamic valid_shapes
+        >>> tile = load(tensor, offsets=[0, 0], shapes=[128, 128], valid_shapes=[M, N])
         >>> # 3D load
         >>> tile = load(tensor, offsets=[0, 0, 0], shapes=[8, 16, 32])
     """
@@ -109,13 +119,24 @@ def load(
     _validate_offsets_shapes(offsets_tuple, shapes_tuple)
 
     kwargs: dict[str, Any] = {"target_memory": target_memory}
-    return _ir_core.create_op_call("block.load", [tensor, offsets_tuple, shapes_tuple], kwargs, actual_span)
+
+    valid_shapes_tuple = shapes_tuple
+    if valid_shapes is not None:
+        valid_shapes_tuple = _to_make_tuple(valid_shapes, actual_span)
+        if len(valid_shapes_tuple.elements) != len(shapes_tuple.elements):
+            raise ValueError(
+                f"valid_shapes and shapes must have same number of dimensions, "
+                f"got {len(valid_shapes_tuple.elements)} valid_shapes and {len(shapes_tuple.elements)} shapes"
+            )
+
+    return _ir_core.create_op_call(
+        "block.load", [tensor, offsets_tuple, shapes_tuple, valid_shapes_tuple], kwargs, actual_span
+    )
 
 
 def store(
     tile: Expr,
     offsets: Sequence[int | Expr] | _ir_core.MakeTuple,
-    shapes: Sequence[int | Expr] | _ir_core.MakeTuple,
     output_tensor: Expr,
     span: Span | None = None,
 ) -> Call:
@@ -124,7 +145,6 @@ def store(
     Args:
         tile: Source tile (TileType)
         offsets: Offsets in each dimension (sequence of scalars), or a MakeTuple
-        shapes: Shape of the tile in each dimension (sequence of scalars), or a MakeTuple
         output_tensor: Output tensor (TensorType)
         span: Optional source span for debugging (auto-captured if not provided)
 
@@ -133,53 +153,14 @@ def store(
 
     Example:
         >>> # 2D store
-        >>> result = store(tile, offsets=[0, 0], shapes=[32, 32], output_tensor=tensor)
+        >>> result = store(tile, offsets=[0, 0], output_tensor=tensor)
         >>> # 3D store
-        >>> result = store(tile, offsets=[0, 0, 0], shapes=[8, 16, 32], output_tensor=tensor)
+        >>> result = store(tile, offsets=[0, 0, 0], output_tensor=tensor)
     """
     actual_span = _get_span_or_capture(span)
     offsets_tuple = _to_make_tuple(offsets, actual_span)
-    shapes_tuple = _to_make_tuple(shapes, actual_span)
-    _validate_offsets_shapes(offsets_tuple, shapes_tuple)
 
-    return _ir_core.create_op_call(
-        "block.store", [tile, offsets_tuple, shapes_tuple, output_tensor], {}, actual_span
-    )
-
-
-def l0c_store(
-    tile: Expr,
-    offsets: Sequence[int | Expr] | _ir_core.MakeTuple,
-    shapes: Sequence[int | Expr] | _ir_core.MakeTuple,
-    output_tensor: Expr,
-    span: Span | None = None,
-) -> Call:
-    """Copy data from L0C tile to GM tensor.
-
-    Args:
-        tile: Source tile (TileType)
-        offsets: Offsets in each dimension (sequence of scalars), or a MakeTuple
-        shapes: Shape of the tile in each dimension (sequence of scalars), or a MakeTuple
-        output_tensor: Output tensor (TensorType)
-        span: Optional source span for debugging (auto-captured if not provided)
-
-    Returns:
-        Call expression that returns the output tensor
-
-    Example:
-        >>> # 2D l0c_store
-        >>> result = l0c_store(tile, offsets=[0, 0], shapes=[32, 32], output_tensor=tensor)
-        >>> # 3D l0c_store
-        >>> result = l0c_store(tile, offsets=[0, 0, 0], shapes=[8, 16, 32], output_tensor=tensor)
-    """
-    actual_span = _get_span_or_capture(span)
-    offsets_tuple = _to_make_tuple(offsets, actual_span)
-    shapes_tuple = _to_make_tuple(shapes, actual_span)
-    _validate_offsets_shapes(offsets_tuple, shapes_tuple)
-
-    return _ir_core.create_op_call(
-        "block.l0c_store", [tile, offsets_tuple, shapes_tuple, output_tensor], {}, actual_span
-    )
+    return _ir_core.create_op_call("block.store", [tile, offsets_tuple, output_tensor], {}, actual_span)
 
 
 def move(
@@ -208,26 +189,6 @@ def move(
     }
 
     return _ir_core.create_op_call("block.move", args, kwargs, actual_span)
-
-
-def vec_move(
-    tile: Expr,
-    span: Span | None = None,
-) -> Call:
-    """Copy tile within Vec (vector/unified buffer) memory.
-
-    This operation is specifically for Vec→Vec copies. Both source and destination
-    must be on Vec memory. For other memory transfer patterns, use move().
-
-    Args:
-        tile: Input tile (TileType) in Vec memory
-        span: Optional source span for debugging (auto-captured if not provided)
-
-    Returns:
-        Call expression that returns a TileType in Vec memory space
-    """
-    actual_span = _get_span_or_capture(span)
-    return _ir_core.create_op_call("block.vec_move", [tile], {}, actual_span)
 
 
 def get_block_idx(span: Span | None = None) -> Call:
@@ -972,7 +933,7 @@ def rsqrt(tile: Expr, span: Span | None = None) -> Call:
 def cast(
     tile: Expr,
     target_type: int | DataType,
-    mode: Literal["none", "rint", "round", "floor", "ceil", "trunc", "odd"] = "round",
+    mode: str | int = "round",
     span: Span | None = None,
 ) -> Call:
     """Cast tile to target data type (element-wise).
@@ -980,7 +941,8 @@ def cast(
     Args:
         tile: Input tile (TileType)
         target_type: Target data type (DataType)
-        mode: Round Mode: None(0), RINT(1), ROUND(2), FLOOR(3), CEIL(4), TRUNC(5), ODD(6)
+        mode: Rounding mode — string name ("none", "rint", "round", "floor",
+              "ceil", "trunc", "odd") or int (0–6)
         span: Optional source span for debugging (auto-captured if not provided)
 
     Returns:
@@ -990,10 +952,7 @@ def cast(
         >>> tile_bf16 = ...  # TileType with BF16 dtype
         >>> tile_fp32 = block.cast(tile_bf16, DataType.FP32)
     """
-    modes = {"none": 0, "rint": 1, "round": 2, "floor": 3, "ceil": 4, "trunc": 5, "odd": 6}
-    mode_val = modes.get(mode)
-    if mode_val is None:
-        raise ValueError(f"Invalid rounding mode '{mode}'. Expected one of {list(modes.keys())}.")
+    mode_val = resolve_cast_mode(mode)
 
     actual_span = _get_span_or_capture(span)
     kwargs: dict[str, Any] = {"target_type": target_type, "mode": mode_val}

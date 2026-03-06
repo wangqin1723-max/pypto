@@ -42,7 +42,6 @@ auto dynamic_dim = make_int(kDynamicDim);
 | `add_argument(name, desc)` | Positional Expr argument | `.add_argument("lhs", "Left tensor")` |
 | `no_argument()` | No arguments (sync ops) | `.no_argument()` |
 | `set_attr<T>(name)` | Kwarg schema (T: bool, int, DataType, etc.) | `.set_attr<bool>("a_trans")` |
-| `set_pipe(PipeType)` | Hardware pipeline type | `.set_pipe(PipeType::S)` |
 | `f_deduce_type(fn)` | Type deduction function | `.f_deduce_type(DeduceAddType)` |
 
 **Type Deduction Signature:**
@@ -267,7 +266,7 @@ with ib.function("block_computation") as f:
     tile_mul = ib.let("tile_mul", block.mul(tile_a, tile_b))
     tile_sqrt = ib.let("tile_sqrt", block.sqrt(tile_mul))
     tile_sum = ib.let("tile_sum", block.sum(tile_sqrt, axis=1, keepdim=True))
-    result = ib.let("result", block.store(tile_sum, [0, 0], [32, 1], output))
+    result = ib.let("result", block.store(tile_sum, [0, 0], output))
     ib.return_stmt(result)
 ```
 
@@ -299,13 +298,12 @@ ib.emit(system.sync_src(set_pipe=2, wait_pipe=4, event_id=0))
 ```cpp
 REGISTER_OP("system.bar_all")
     .set_op_category("SyncOp")
-    .set_pipe(PipeType::S)
     .no_argument()
     .f_deduce_type(DeduceUnknownType);
 
 REGISTER_OP("system.sync_src")
     .set_op_category("SyncOp")
-    .set_pipe(PipeType::S)
+    .no_argument()
     .set_attr<int>("set_pipe")
     .set_attr<int>("wait_pipe")
     .set_attr<int>("event_id")

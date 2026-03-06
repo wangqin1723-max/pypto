@@ -104,8 +104,9 @@ Main class orchestrating all components. Extends `IRVisitor`.
 
 1. Function signature with `__aicore__` and `__attribute__((always_inline))`
 2. Argument unpacking from `int64_t* args` array
-3. GlobalTensor type definitions and instances
-4. Tile type definitions with TASSIGN memory allocation (if MemRef present)
+3. Access shape collection via **TensorAccessShapeCollector** (pre-scans `block.load`/`block.store` calls to extract access window shapes for each tensor)
+4. GlobalTensor type definitions and instances (using access window shapes for `Shape<>`/`Stride<>` type parameters when available)
+5. Tile type definitions with TASSIGN memory allocation (if MemRef present)
 
 **TileCollector** traverses function body to discover tile-typed variables from AssignStmt nodes. IfStmt return_vars are NOT collected; they're declared before the if statement.
 
@@ -164,7 +165,7 @@ def simple_add(x: Tensor([128, 64], FP32), y: Tensor([128, 64], FP32)):
     tile_z = block.add(tile_x, tile_y)
     system.sync_src(PIPE_V, PIPE_MTE3, EVENT_ID0)
     system.sync_dst(PIPE_V, PIPE_MTE3, EVENT_ID0)
-    result = block.store(tile_z, [0, 0], [128, 64], output)
+    result = block.store(tile_z, [0, 0], output)
 ```
 
 **Generated C++ (simplified):**
@@ -377,7 +378,7 @@ pytest -v tests/ut/codegen/       # Verbose
 - [IR Hierarchy](../ir/01-hierarchy.md)
 - [Visitor Pattern](../../../include/pypto/ir/transform/base/visitor.h)
 - [Pass System](../passes/00-pass_manager.md)
-- [pto-isa Documentation](https://gitcode.com/cann/pto-isa)
+- [pto-isa Documentation](https://github.com/PTO-ISA/pto-isa)
 
 ## Summary
 

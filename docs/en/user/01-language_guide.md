@@ -21,7 +21,7 @@ Complete reference for the `pypto.language` (`pl`) module.
 | `pl.FP8E4M3FN` | 8 | 8-bit float (e4m3fn) |
 | `pl.FP8E5M2` | 8 | 8-bit float (e5m2) |
 | `pl.HF4` / `pl.HF8` | 4/8 | Hisilicon float formats |
-| `pl.INDEX` | 64 | Index type (alias for INT64) — loop vars, dimensions |
+| `pl.INDEX` | 64 | Index type for index computations — loop vars, dimensions |
 
 ### Container Types
 
@@ -440,7 +440,7 @@ DDR (off-chip, global memory)
 tile = pl.load(tensor, [0, 0], [64, 64])                                  # DDR → Vec
 tile_l1 = pl.load(tensor, [0, 0], [32, 32], target_memory=pl.MemorySpace.Mat)  # DDR → Mat
 tile_l0a = pl.move(tile_l1, target_memory=pl.MemorySpace.Left)            # Mat → Left
-out = pl.store(tile, [0, 0], [64, 64], output)                            # Tile → DDR
+out = pl.store(tile, [0, 0], output)                            # Tile → DDR
 ```
 
 ### Pattern: Matrix Multiply (DDR → Mat → Left/Right → Acc → DDR)
@@ -451,7 +451,7 @@ b_l1 = pl.load(b, [0, 0], [32, 32], target_memory=pl.MemorySpace.Mat)
 a_l0a = pl.move(a_l1, target_memory=pl.MemorySpace.Left)
 b_l0b = pl.move(b_l1, target_memory=pl.MemorySpace.Right)
 c_acc = pl.matmul(a_l0a, b_l0b)                     # result → Acc
-out = pl.store(c_acc, [0, 0], [32, 32], output)      # Acc → DDR
+out = pl.store(c_acc, [0, 0], output)      # Acc → DDR
 ```
 
 ## Compilation

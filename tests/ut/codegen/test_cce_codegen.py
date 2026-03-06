@@ -34,7 +34,7 @@ class TestCCECodegenBasics:
         backend.set_backend_type(BackendType.CCE)
         ib = IRBuilder()
 
-        with ib.function("test_tadds_simple") as f:
+        with ib.function("test_tadds_simple", type=ir.FunctionType.InCore) as f:
             # Define input and output parameters (Global Tensors -> DDR)
             input_a = f.param("input_a", ir.TensorType([128, 128], DataType.FP32))
             input_b = f.param("input_b", ir.ScalarType(DataType.FP32))
@@ -52,7 +52,7 @@ class TestCCECodegenBasics:
             tile_sum = ib.let("tile_sum", block.adds(tile_a, input_b))
 
             # Store (should infer output as DDR)
-            result = ib.let("result", block.store(tile_sum, [0, 0], [tile_height, tile_width], output))
+            result = ib.let("result", block.store(tile_sum, [0, 0], output))
 
             ib.return_stmt(result)
 
@@ -69,7 +69,7 @@ class TestCCECodegenBasics:
 
         # Verify function parameters unpacking and declarations are generated
         assert "GlobalTensor<float" in code
-        assert "__gm__ Tensor*" in code
+        assert "__gm__ TensorData*" in code
         assert "->buffer.addr" in code
         assert "union { uint64_t u64; float val; }" in code
         assert "float input_b_0 =" in code
@@ -96,7 +96,7 @@ class TestControlFlowCodegen:
         backend.set_backend_type(BackendType.CCE)
         ib = IRBuilder()
 
-        with ib.function("test_simple_for") as f:
+        with ib.function("test_simple_for", type=ir.FunctionType.InCore) as f:
             # Parameters
             input_tensor = f.param("input", ir.TensorType([128, 64], DataType.FP32))
             output_tensor = f.param("output", ir.TensorType([128, 64], DataType.FP32))
@@ -110,7 +110,7 @@ class TestControlFlowCodegen:
                 # Load tile inside loop
                 tile_x = ib.let("tile_x", block.load(input_tensor, [i, 0], [32, 64]))
                 # Store tile back
-                result = ib.let("result", block.store(tile_x, [i, 0], [32, 64], output_tensor))
+                result = ib.let("result", block.store(tile_x, [i, 0], output_tensor))
 
             ib.return_stmt(result)
 
@@ -131,7 +131,7 @@ class TestControlFlowCodegen:
         backend.set_backend_type(BackendType.CCE)
         ib = IRBuilder()
 
-        with ib.function("test_nested_for") as f:
+        with ib.function("test_nested_for", type=ir.FunctionType.InCore) as f:
             # Parameters
             input_tensor = f.param("input", ir.TensorType([128, 128], DataType.FP32))
             output_tensor = f.param("output", ir.TensorType([128, 128], DataType.FP32))
@@ -148,7 +148,7 @@ class TestControlFlowCodegen:
                     # Load tile inside inner loop
                     tile_x = ib.let("tile_x", block.load(input_tensor, [i, j], [32, 32]))
                     # Store tile back
-                    result = ib.let("result", block.store(tile_x, [i, j], [32, 32], output_tensor))
+                    result = ib.let("result", block.store(tile_x, [i, j], output_tensor))
 
             ib.return_stmt(result)
 
@@ -184,7 +184,9 @@ class TestControlFlowCodegen:
         ret_stmt = ir.ReturnStmt([], span)
         seq = ir.SeqStmts([if_stmt, ret_stmt], span)
 
-        func = ir.Function("test_if", [], [ir.TensorType([1], DataType.FP32)], seq, span)
+        func = ir.Function(
+            "test_if", [], [ir.TensorType([1], DataType.FP32)], seq, span, type=ir.FunctionType.InCore
+        )
         program = ir.Program([func], "test_if", ir.Span.unknown())
 
         generator = codegen.CCECodegen()
@@ -224,7 +226,9 @@ class TestControlFlowCodegen:
         ret_stmt = ir.ReturnStmt([], span)
         seq = ir.SeqStmts([assign_a, assign_b, if_stmt, ret_stmt], span)
 
-        func = ir.Function("test_if_else", [], [ir.TensorType([1], DataType.FP32)], seq, span)
+        func = ir.Function(
+            "test_if_else", [], [ir.TensorType([1], DataType.FP32)], seq, span, type=ir.FunctionType.InCore
+        )
         program = ir.Program([func], "test_if_else", ir.Span.unknown())
 
         generator = codegen.CCECodegen()
@@ -275,10 +279,8 @@ class TestMatmulCodegen:
                 # Matmul
                 tile_c_l0c: pl.Tile[[64, 64], pl.FP32] = pl.matmul(tile_a_l0a, tile_b_l0b)
 
-                # Move back and store
-                # don't use TMOV to move l0c to l1, it has some constraints on the tile type(to be fixed)
-                # TSTORE can support l0c to GM
-                result: pl.Tensor[[64, 64], pl.FP32] = pl.l0c_store(tile_c_l0c, [0, 0], [64, 64], c)
+                # Store
+                result: pl.Tensor[[64, 64], pl.FP32] = pl.store(tile_c_l0c, [0, 0], c)
                 return result
 
         program = TestMatmulProgram
@@ -351,8 +353,8 @@ class TestMatmulCodegen:
                 # Accumulating matmul
                 tile_c1: pl.Tile[[32, 32], pl.FP32] = pl.matmul_acc(tile_c0, tile_a1_l0a, tile_b1_l0b)
 
-                # Move result and store
-                result: pl.Tensor[[32, 32], pl.FP32] = pl.l0c_store(tile_c1, [0, 0], [32, 32], c)
+                # Store
+                result: pl.Tensor[[32, 32], pl.FP32] = pl.store(tile_c1, [0, 0], c)
                 return result
 
         program = TestMatmulAccProgram

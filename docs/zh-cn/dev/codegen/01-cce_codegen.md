@@ -104,8 +104,9 @@ GlobalTensor 变量包装原始指针。对于地址运算 (如 `output + offset
 
 1. 带 `__aicore__` 和 `__attribute__((always_inline))` 的函数签名
 2. 从 `int64_t* args` 数组解包参数
-3. GlobalTensor 类型定义和实例
-4. 带 TASSIGN 内存分配的 Tile 类型定义 (如存在 MemRef)
+3. 通过 **TensorAccessShapeCollector** 收集访问形状 (预扫描 `block.load`/`block.store` 调用, 提取每个张量的访问窗口形状)
+4. GlobalTensor 类型定义和实例 (可用时使用访问窗口形状作为 `Shape<>`/`Stride<>` 类型参数)
+5. 带 TASSIGN 内存分配的 Tile 类型定义 (如存在 MemRef)
 
 **TileCollector** 遍历函数体, 从 AssignStmt 节点发现 Tile 类型变量。IfStmt 的 return_vars 不会被收集; 它们在 if 语句 (Statement) 之前声明。
 
@@ -164,7 +165,7 @@ def simple_add(x: Tensor([128, 64], FP32), y: Tensor([128, 64], FP32)):
     tile_z = block.add(tile_x, tile_y)
     system.sync_src(PIPE_V, PIPE_MTE3, EVENT_ID0)
     system.sync_dst(PIPE_V, PIPE_MTE3, EVENT_ID0)
-    result = block.store(tile_z, [0, 0], [128, 64], output)
+    result = block.store(tile_z, [0, 0], output)
 ```
 
 **生成的 C++ (简化):**
@@ -377,7 +378,7 @@ pytest -v tests/ut/codegen/       # Verbose
 - [IR 层次结构](../ir/01-hierarchy.md)
 - [访问者模式](../../../../include/pypto/ir/transform/base/visitor.h)
 - [Pass 系统](../passes/00-pass_manager.md)
-- [pto-isa 文档](https://gitcode.com/cann/pto-isa)
+- [pto-isa 文档](https://github.com/PTO-ISA/pto-isa)
 
 ## 总结
 

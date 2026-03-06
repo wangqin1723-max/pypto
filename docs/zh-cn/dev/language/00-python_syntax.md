@@ -193,22 +193,40 @@ else:
 ### For 循环 (带 iter_args 的 SSA 风格)
 
 ```python
-# Simple loop
-for i in pl.range(start, stop, step):
-    body_statements
+# 简单循环 (1-3 个位置参数，类似 Python 的 range())
+for i in pl.range(stop):                    # start=0, step=1
+for i in pl.range(start, stop):             # step=1
+for i in pl.range(start, stop, step):       # 完整形式
 
-# Loop with iter_args (loop-carried values)
+# 带 iter_args 的循环 (循环携带值)
 sum_init: pl.INT64 = 0
-for i, (sum,) in pl.range(0, n, 1, init_values=(sum_init,)):
+for i, (sum,) in pl.range(n, init_values=(sum_init,)):
     sum = pl.yield_(sum + i)
 sum_final = sum
 
-# Parallel for loop
+# 并行 for 循环 (同样支持 1-3 个参数)
+for i in pl.parallel(stop):
 for i in pl.parallel(start, stop, step):
     body_statements
 ```
 
 **要点:** 循环携带值使用 `pl.range()` 或 `pl.parallel()` 的 `init_values`, 元组解包 `(sum,)` 声明 iter_args, `pl.yield_()` 为下一次迭代更新值, 循环结束后 iter_args 包含最终值。`pl.parallel()` 生成 `ForKind.Parallel` 循环, `pl.range()` 生成 `ForKind.Sequential` (默认)。
+
+#### 分块循环 (Chunked Loops)
+
+```python
+# 将循环拆分为每块 C 次迭代的嵌套循环
+for i in pl.range(10, chunk=5):
+    body_statements
+
+for i in pl.parallel(8, chunk=4):
+    body_statements
+
+for i in pl.unroll(12, chunk=4):
+    body_statements
+```
+
+**要点:** `chunk=C` 将循环拆分为外层顺序循环和 `C` 次迭代的内层循环。内层循环保留原始类型 (Sequential/Parallel/Unroll)。`chunk` 不能与 `init_values` 一起使用。参见 [SplitChunkedLoops Pass](../passes/11-split_chunked_loops.md)。
 
 ### Yield 语句
 
@@ -297,7 +315,7 @@ import pypto.language as pl
 
 def loop_sum(n: pl.INT64) -> pl.INT64:
     sum_init: pl.INT64 = 0
-    for i, (sum,) in pl.range(0, n, 1, init_values=(sum_init,)):
+    for i, (sum,) in pl.range(n, init_values=(sum_init,)):
         sum = pl.yield_(sum + i)
     return sum
 ```
@@ -319,7 +337,7 @@ class BlockExample:
         tile_a: pl.Tile[[64, 64], pl.FP32] = pl.load(input_a, [0, 0], [64, 64])
         tile_b: pl.Tile[[64, 64], pl.FP32] = pl.load(input_b, [0, 0], [64, 64])
         tile_c: pl.Tile[[64, 64], pl.FP32] = pl.add(tile_a, tile_b)
-        result: pl.Tensor[[64, 64], pl.FP32] = pl.store(tile_c, [0, 0], [64, 64], output)
+        result: pl.Tensor[[64, 64], pl.FP32] = pl.store(tile_c, [0, 0], output)
         return result
 ```
 
@@ -337,7 +355,7 @@ else:
 
 # For: loop-carried values via iter_args
 sum_init: pl.INT64 = 0
-for i, (sum,) in pl.range(0, 10, 1, init_values=(sum_init,)):
+for i, (sum,) in pl.range(10, init_values=(sum_init,)):
     sum = pl.yield_(sum + i)
 sum_final: pl.INT64 = sum  # captures final value
 ```

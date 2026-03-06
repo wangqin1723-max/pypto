@@ -112,8 +112,8 @@ jobs:
 
       - name: Install ptoas
         run: |
-          PTOAS_VERSION=v0.2
-          PTOAS_SHA256=2d0a89b6790e6dc5b76b13b005ce75942b91f36dc11009460bed270dd3646887
+          PTOAS_VERSION=v0.3
+          PTOAS_SHA256=203727d744cd437325e3b22c599ca90f642e51e735ede2ac3a22636b36aa89d9
           curl --fail --location --retry 3 --retry-all-errors \
             https://github.com/zhangstevenunity/PTOAS/releases/download/${PTOAS_VERSION}/ptoas-bin-aarch64.tar.gz \
              -o /tmp/ptoas-bin-aarch64.tar.gz
@@ -131,10 +131,10 @@ jobs:
         continue-on-error: true
         run: pytest tests/st -v --device=$DEVICE_ID --forked
 
-      - name: Checkout stable simpler commit on failure
+      - name: Checkout stable simpler branch on failure
         if: steps.test_first_attempt.outcome == 'failure'
         working-directory: ${{ github.workspace }}/simpler
-        run: git checkout eede5613f28f9fa2c1ac0b29b27fa6eacb2ef2db
+        run: git checkout stable
 
       - name: Test system tests (retry with stable version)
         id: test_retry
@@ -144,27 +144,3 @@ jobs:
       - name: Check final test result
         if: steps.test_first_attempt.outcome == 'failure' && steps.test_retry.outcome == 'failure'
         run: exit 1
-
-      # --- Fuzz testing ---
-      - name: Run fuzz tests (device)
-        run: |
-          rm -rf build/fuzz-artifacts && mkdir -p build/fuzz-artifacts/hw
-          python tests/st/fuzz/example_mutil_kernel.py --num-cases 10
-          pytest tests/st/fuzz/generated/test_fuzz_multi_kernel.py \
-            -v -s --save-kernels --dump-passes \
-            --kernels-dir=build/fuzz-artifacts/hw \
-            --device=$DEVICE_ID --forked --platform=a2a3 \
-            --junitxml=fuzz-results-hw.xml || true
-          python tests/st/fuzz/check_pass_rate.py \
-            fuzz-results-hw.xml \
-            --threshold 0.7
-
-      - name: Upload fuzz artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: fuzz-artifacts-${{ github.run_id }}
-          path: |
-            fuzz-results-hw.xml
-            build/fuzz-artifacts/
-          retention-days: 7

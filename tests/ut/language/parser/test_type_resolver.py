@@ -265,14 +265,14 @@ class TestDynamicShapeResolution:
         assert isinstance(shape[0], ir.Var)
         assert shape[1] == 64
 
-    def test_dynvar_has_int64_scalar_type(self):
-        """DynVar creates Var with ScalarType(INT64)."""
+    def test_dynvar_has_index_scalar_type(self):
+        """DynVar creates Var with ScalarType(INDEX)."""
         resolver = _make_resolver(closure_vars={"M": DynVar("M")})
         node = ast.parse("[M]", mode="eval").body
         shape = resolver._parse_shape(node)
         assert isinstance(shape[0], ir.Var)
         assert isinstance(shape[0].type, ir.ScalarType)
-        assert shape[0].type.dtype == DataType.INT64
+        assert shape[0].type.dtype == DataType.INDEX
 
     # --- Scope lookup (Scalar IR vars in function body) ---
 
@@ -886,9 +886,7 @@ class TestClosureVarsInFunctionBody:
             t: pl.Tensor[tensor_shape, dtype], out: pl.Tensor[tensor_shape, dtype]
         ) -> pl.Tensor[tensor_shape, dtype]:
             a: pl.Tile[tile_shape, dtype] = pl.block.load(t, offsets=[0, 0], shapes=tile_shape)
-            result: pl.Tensor[tensor_shape, dtype] = pl.block.store(
-                a, offsets=[0, 0], shapes=tile_shape, output_tensor=out
-            )
+            result: pl.Tensor[tensor_shape, dtype] = pl.block.store(a, offsets=[0, 0], output_tensor=out)
             return result
 
         assert isinstance(func, ir.Function)
@@ -902,9 +900,7 @@ class TestClosureVarsInFunctionBody:
             t: pl.Tensor[[128, 128], pl.FP32], out: pl.Tensor[[128, 128], pl.FP32]
         ) -> pl.Tensor[[128, 128], pl.FP32]:
             a: pl.Tile[[32, 32], pl.FP32] = pl.block.load(t, offsets=[0, 0], shapes=tile_shape)
-            result: pl.Tensor[[128, 128], pl.FP32] = pl.block.store(
-                a, offsets=[0, 0], shapes=tile_shape, output_tensor=out
-            )
+            result: pl.Tensor[[128, 128], pl.FP32] = pl.block.store(a, offsets=[0, 0], output_tensor=out)
             return result
 
         assert isinstance(func, ir.Function)
@@ -944,9 +940,7 @@ class TestClosureVarsInFunctionBody:
         def kernel_add(t: pl.Tensor[[x, y], dtype], out: pl.Tensor[shape, dtype]) -> pl.Tensor[shape, dtype]:
             a: pl.Tile[tile_shape, dtype] = pl.block.load(t, offsets=[0, 0], shapes=tile_shape)
             b: pl.Tile[tile_shape, dtype] = pl.add(a, 5)
-            result: pl.Tensor[shape, dtype] = pl.block.store(
-                b, offsets=[0, 0], shapes=tile_shape, output_tensor=out
-            )
+            result: pl.Tensor[shape, dtype] = pl.block.store(b, offsets=[0, 0], output_tensor=out)
             return result
 
         assert isinstance(kernel_add, ir.Function)
@@ -968,9 +962,7 @@ class TestClosureVarsInFunctionBody:
                 self, t: pl.Tensor[shape, dtype], out: pl.Tensor[shape, dtype]
             ) -> pl.Tensor[shape, dtype]:
                 a: pl.Tile[tile_shape, dtype] = pl.block.load(t, offsets=[0, 0], shapes=tile_shape)
-                result: pl.Tensor[shape, dtype] = pl.block.store(
-                    a, offsets=[0, 0], shapes=tile_shape, output_tensor=out
-                )
+                result: pl.Tensor[shape, dtype] = pl.block.store(a, offsets=[0, 0], output_tensor=out)
                 return result
 
         assert isinstance(Prog, ir.Program)
@@ -1059,9 +1051,7 @@ class TestDynamicShapeEdgeCases:
             t: pl.Tensor[[128, 128], pl.FP32], out: pl.Tensor[[128, 128], pl.FP32]
         ) -> pl.Tensor[[128, 128], pl.FP32]:
             a: pl.Tile[tile_shape, pl.FP32] = pl.block.load(t, offsets=[0, 0], shapes=[32, 32])
-            result: pl.Tensor[[128, 128], pl.FP32] = pl.block.store(
-                a, offsets=[0, 0], shapes=[32, 32], output_tensor=out
-            )
+            result: pl.Tensor[[128, 128], pl.FP32] = pl.block.store(a, offsets=[0, 0], output_tensor=out)
             return result
 
         assert isinstance(func, ir.Function)

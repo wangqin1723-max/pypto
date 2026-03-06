@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <iomanip>
 #include <ios>
@@ -44,6 +45,33 @@
 
 namespace pypto {
 namespace ir {
+
+namespace {
+
+/// Convert cast round mode integer to its string name for printing.
+/// Inverse of the CAST_MODE_NAMES mapping in python/pypto/ir/utils.py.
+std::string CastModeToString(int mode) {
+  switch (mode) {
+    case 0:
+      return "none";
+    case 1:
+      return "rint";
+    case 2:
+      return "round";
+    case 3:
+      return "floor";
+    case 4:
+      return "ceil";
+    case 5:
+      return "trunc";
+    case 6:
+      return "odd";
+    default:
+      throw ValueError("Cast round mode must be in range [0, 6], got " + std::to_string(mode));
+  }
+}
+
+}  // namespace
 
 // Precedence mapping for each expression type
 Precedence GetPrecedence(const ExprPtr& expr) {
@@ -362,11 +390,14 @@ void IRPythonPrinter::VisitExpr_(const IterArgPtr& op) { stream_ << op->name_; }
 void IRPythonPrinter::VisitExpr_(const MemRefPtr& op) { stream_ << op->name_; }
 
 void IRPythonPrinter::VisitExpr_(const ConstIntPtr& op) {
-  if (op->dtype() != DataType::DEFAULT_CONST_INT) {
+  // DEFAULT_CONST_INT (= INT64) and INDEX both represent 64-bit integer constants
+  // in the Python DSL, so they print as bare integers. Other integer types (INT8,
+  // INT32, etc.) need explicit dtype annotation.
+  if (op->dtype() == DataType::DEFAULT_CONST_INT || op->dtype() == DataType::INDEX) {
+    stream_ << op->value_;
+  } else {
     stream_ << prefix_ << ".const(" << op->value_ << ", " << prefix_ << "." << DataTypeToString(op->dtype())
             << ")";
-  } else {
-    stream_ << op->value_;
   }
 }
 
@@ -410,10 +441,18 @@ void IRPythonPrinter::VisitExpr_(const CallPtr& op) {
   if (op_name.find('.') != std::string::npos) {
     // This is an operation like "tensor.add_scalar" or "block.matmul"
     // Convert internal operation names to high-level API format
-    // Remove "_scalar" suffix if present (e.g., "tensor.add_scalar" -> "tensor.add")
-    size_t scalar_pos = op_name.find("_scalar");
-    if (scalar_pos != std::string::npos) {
-      op_name = op_name.substr(0, scalar_pos);
+    // Strip known internal suffixes that should not appear in printed output.
+    // Use a true suffix check so substrings in the middle are not removed.
+    auto strip_suffix = [](std::string& s, const std::string& suffix) -> bool {
+      if (s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        s.resize(s.size() - suffix.size());
+        return true;
+      }
+      return false;
+    };
+    // "_scalar" and "_tile" are mutually exclusive; try in order.
+    if (!strip_suffix(op_name, "_scalar")) {
+      strip_suffix(op_name, "_tile");
     }
 
     // Print with pl. prefix
@@ -456,6 +495,8 @@ void IRPythonPrinter::VisitExpr_(const CallPtr& op) {
       // Print pipe kwargs as PipeType enum names for readability
       if (key == "set_pipe" || key == "wait_pipe") {
         stream_ << prefix_ << ".PipeType." << PipeTypeToString(static_cast<PipeType>(int_val));
+      } else if (key == "mode") {
+        stream_ << "'" << CastModeToString(int_val) << "'";
       } else {
         stream_ << int_val;
       }
@@ -538,7 +579,7 @@ void IRPythonPrinter::PrintBinaryOp(const BinaryExprPtr& op, const char* op_symb
 }
 
 void IRPythonPrinter::PrintFunctionBinaryOp(const BinaryExprPtr& op, const char* func_name) {
-  stream_ << func_name << "(";
+  stream_ << prefix_ << "." << func_name << "(";
   VisitExpr(op->left_);
   stream_ << ", ";
   VisitExpr(op->right_);
@@ -681,9 +722,6 @@ void IRPythonPrinter::VisitStmt_(const ForStmtPtr& op) {
   // SSA-style for with pl.range() or pl.parallel() - no inline type annotations in unpacking
   stream_ << "for " << op->loop_var_->name_;
 
-  // Determine range keyword based on kind
-  bool is_parallel = (op->kind_ == ForKind::Parallel);
-
   // If we have iter_args, add tuple unpacking without type annotations
   if (!op->iter_args_.empty()) {
     stream_ << ", (";
@@ -697,15 +735,61 @@ void IRPythonPrinter::VisitStmt_(const ForStmtPtr& op) {
     }
     stream_ << ")";
   }
-  stream_ << " in " << prefix_ << (is_parallel ? ".parallel(" : ".range(");
 
-  VisitExpr(op->start_);
-  stream_ << ", ";
-  VisitExpr(op->stop_);
-  stream_ << ", ";
-  VisitExpr(op->step_);
+  // Select range function based on loop kind
+  const char* range_func = ".range(";
+  switch (op->kind_) {
+    case ForKind::Unroll:
+      range_func = ".unroll(";
+      break;
+    case ForKind::Parallel:
+      range_func = ".parallel(";
+      break;
+    case ForKind::Sequential:
+      break;
+    default:
+      INTERNAL_CHECK(false) << "Unknown ForKind in python_printer: " << ForKindToString(op->kind_);
+      break;
+  }
+  stream_ << " in " << prefix_ << range_func;
 
-  // Add init_values for iter_args
+  // Use concise range form like Python: range(stop) when start==0 and step==1,
+  // range(start, stop) when step==1, range(start, stop, step) otherwise.
+  auto is_const_int = [](const ExprPtr& expr, int64_t value) -> bool {
+    if (auto ci = As<ConstInt>(expr)) {
+      // Only elide for canonical loop-bound dtypes to preserve round-trip fidelity.
+      return ci->value_ == value &&
+             (ci->dtype() == DataType::DEFAULT_CONST_INT || ci->dtype() == DataType::INDEX);
+    }
+    return false;
+  };
+
+  bool start_is_zero = is_const_int(op->start_, 0);
+  bool step_is_one = is_const_int(op->step_, 1);
+
+  if (start_is_zero && step_is_one) {
+    // range(stop)
+    VisitExpr(op->stop_);
+  } else if (step_is_one) {
+    // range(start, stop)
+    VisitExpr(op->start_);
+    stream_ << ", ";
+    VisitExpr(op->stop_);
+  } else {
+    // range(start, stop, step)
+    VisitExpr(op->start_);
+    stream_ << ", ";
+    VisitExpr(op->stop_);
+    stream_ << ", ";
+    VisitExpr(op->step_);
+  }
+
+  // Unroll loops cannot have iter_args. The DSL parser forbids init_values for
+  // pl.unroll(), and SplitChunkedLoops preserves this: chunk-split unroll loops
+  // always take the simple (no iter_args) path.
+  if (op->kind_ == ForKind::Unroll && !op->iter_args_.empty()) {
+    INTERNAL_CHECK(false) << "ForKind::Unroll does not support iter_args/init_values";
+  }
   if (!op->iter_args_.empty()) {
     stream_ << ", init_values=(";
     for (size_t i = 0; i < op->iter_args_.size(); ++i) {
@@ -715,6 +799,15 @@ void IRPythonPrinter::VisitStmt_(const ForStmtPtr& op) {
     // Add trailing comma for single-element tuple
     if (op->iter_args_.size() == 1) stream_ << ",";
     stream_ << ")";
+  }
+
+  // Add chunk kwargs
+  if (op->chunk_size_.has_value()) {
+    stream_ << ", chunk=";
+    VisitExpr(*op->chunk_size_);
+    if (op->chunk_policy_ != ChunkPolicy::LeadingFull) {
+      stream_ << ", chunk_policy=\"" << ChunkPolicyToString(op->chunk_policy_) << "\"";
+    }
   }
 
   stream_ << "):\n";
@@ -773,6 +866,7 @@ void IRPythonPrinter::VisitStmt_(const ScopeStmtPtr& op) {
   // Map ScopeKind to DSL function name for robustness
   static const std::unordered_map<ScopeKind, std::string> scope_kind_to_dsl = {
       {ScopeKind::InCore, "incore"},
+      {ScopeKind::AutoInCore, "auto_incore"},
   };
 
   auto it = scope_kind_to_dsl.find(op->scope_kind_);
@@ -1154,10 +1248,12 @@ std::string IRPythonPrinter::PrintTileView(const TileView& tile_view) {
 
   oss << "], start_offset=";
 
-  // Print start_offset
-  {
+  // Print start_offset (may be null for default-constructed TileView)
+  if (tile_view.start_offset) {
     IRPythonPrinter temp_printer(prefix_);
     oss << temp_printer.Print(tile_view.start_offset);
+  } else {
+    oss << "0";
   }
 
   // Print blayout
