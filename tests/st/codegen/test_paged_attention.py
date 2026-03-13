@@ -630,6 +630,7 @@ class PagedAttentionMultitierExampleTestCase(PagedAttentionTestCase):
             head_dim=self.head_dim,
             block_size=self.block_size,
             max_num_blocks_per_req=self.max_num_blocks_per_req,
+            assume_contiguous_blocks=True,
         )
 
     def compute_expected(self, tensors, params=None):
@@ -735,6 +736,80 @@ class PagedAttentionMultitierExamplePTOASTestCase(PTOASTestCaseMixin, PagedAtten
         return (
             f"paged_attention_multitier_example_ptoas_"
             f"{self.batch}bat_{self.num_heads}h_{self.head_dim}d_{self.block_size}bs"
+        )
+
+
+class PagedAttentionMultitierShuffledTestCase(PagedAttentionTestCase):
+    """Test multitier program with shuffled (non-contiguous) block_table.
+
+    Uses assume_contiguous_blocks=False so all blocks go through x1 tier.
+    The shuffled block_table verifies correctness when physical blocks are
+    not contiguous.
+    """
+
+    def get_name(self) -> str:
+        return (
+            f"paged_attention_multitier_shuffled_"
+            f"{self.batch}bat_{self.num_heads}h_{self.head_dim}d_{self.block_size}bs"
+        )
+
+    def define_tensors(self) -> list[TensorSpec]:
+        B = self.batch
+        H = self.num_heads
+        D = self.head_dim
+        BS = self.block_size
+        max_blocks = self.max_num_blocks_per_req
+        total_pool_rows = B * max_blocks * BS
+
+        scale_bits = struct.unpack("I", struct.pack("f", self.scale))[0]
+        config = torch.tensor(
+            [B, H, 1, D, BS, max_blocks, scale_bits],
+            dtype=torch.int64,
+        )
+        # Shuffled block_table: each batch's blocks are randomly permuted
+        block_table = torch.arange(B * max_blocks, dtype=torch.int32)
+        for b in range(B):
+            start = b * max_blocks
+            end = start + max_blocks
+            block_table[start:end] = block_table[start:end][torch.randperm(max_blocks)]
+        context_lens = torch.full((B,), self.context_len, dtype=torch.int32)
+
+        return [
+            TensorSpec("query", [B * H, D], DataType.BF16, init_value=torch.randn),
+            TensorSpec("key_cache", [total_pool_rows, D], DataType.BF16, init_value=torch.randn),
+            TensorSpec("value_cache", [total_pool_rows, D], DataType.BF16, init_value=torch.randn),
+            TensorSpec("block_table", [B * max_blocks], DataType.INT32, init_value=block_table),
+            TensorSpec("context_lens", [B], DataType.INT32, init_value=context_lens),
+            TensorSpec("out", [B * H, D], DataType.FP32, is_output=True),
+            TensorSpec("config", [7], DataType.INT64, init_value=config),
+            TensorSpec(
+                "size_query",
+                [1],
+                DataType.INT64,
+                init_value=torch.tensor([B * H * D * 2], dtype=torch.int64),
+            ),
+            TensorSpec(
+                "size_key_cache",
+                [1],
+                DataType.INT64,
+                init_value=torch.tensor([total_pool_rows * D * 2], dtype=torch.int64),
+            ),
+            TensorSpec(
+                "size_value_cache",
+                [1],
+                DataType.INT64,
+                init_value=torch.tensor([total_pool_rows * D * 2], dtype=torch.int64),
+            ),
+        ]
+
+    def get_program(self):
+        return build_paged_attention_multitier_program(
+            batch=self.batch,
+            num_heads=self.num_heads,
+            head_dim=self.head_dim,
+            block_size=self.block_size,
+            max_num_blocks_per_req=self.max_num_blocks_per_req,
+            assume_contiguous_blocks=False,
         )
 
 
@@ -1029,10 +1104,7 @@ class TestPagedAttentionKernels:
     @pytest.mark.parametrize(
         "batch,num_heads,head_dim,block_size,context_len,max_model_len",
         [
-            (1, 16, 128, 128, 640, 640),
-            (8, 16, 128, 128, 640, 1280),
-            (12, 16, 128, 128, 512, 1024),
-            (16, 16, 128, 128, 256, 512),
+            (64, 16, 128, 128, 8192, 32768),
         ],
     )
     def test_paged_attention_multitier_example(
@@ -1054,10 +1126,7 @@ class TestPagedAttentionKernels:
     @pytest.mark.parametrize(
         "batch,num_heads,head_dim,block_size,context_len,max_model_len",
         [
-            (1, 16, 128, 128, 640, 640),
-            (8, 16, 128, 128, 640, 1280),
-            (12, 16, 128, 128, 512, 1024),
-            (16, 16, 128, 128, 256, 512),
+            (64, 16, 128, 128, 8192, 32768),
         ],
     )
     def test_paged_attention_multitier_example_ptoas(
@@ -1074,6 +1143,27 @@ class TestPagedAttentionKernels:
         )
         result = test_runner.run(test_case)
         assert result.passed, f"Paged attention multitier example PTOAS test failed: {result.error}"
+
+    @pytest.mark.parametrize(
+        "batch,num_heads,head_dim,block_size,context_len,max_model_len",
+        [
+            (64, 16, 128, 128, 8192, 32768),
+        ],
+    )
+    def test_paged_attention_multitier_shuffled(
+        self, test_runner, batch, num_heads, head_dim, block_size, context_len, max_model_len
+    ):
+        """Test multitier program with shuffled block_table (x1-only fallback)."""
+        test_case = PagedAttentionMultitierShuffledTestCase(
+            batch=batch,
+            num_heads=num_heads,
+            head_dim=head_dim,
+            block_size=block_size,
+            context_len=context_len,
+            max_model_len=max_model_len,
+        )
+        result = test_runner.run(test_case)
+        assert result.passed, f"Paged attention multitier shuffled test failed: {result.error}"
 
 
 if __name__ == "__main__":

@@ -203,22 +203,12 @@ def kernel_qk_matmul_2block(
     output: pl.Out[pl.Tensor[[16, 256], pl.FP32]],
 ) -> pl.Tensor[[16, 256], pl.FP32]:
     """QK matmul 2block: sij = qi @ kj.T (CUBE)."""
-    # First block: qi @ kj[0:128].T -> output[:,0:128]
     qi_l1_0 = pl.load(qi, offsets=[0, 0], shapes=[16, 128], target_memory=pl.MemorySpace.Mat)
-    kj0_l1 = pl.load(kj, offsets=[0, 0], shapes=[128, 128], target_memory=pl.MemorySpace.Mat, transpose=True)
+    kj0_l1 = pl.load(kj, offsets=[0, 0], shapes=[128, 256], target_memory=pl.MemorySpace.Mat, transpose=True)
     qi_l0a_0 = pl.move(qi_l1_0, target_memory=pl.MemorySpace.Left)
     kj0_l0b = pl.move(kj0_l1, target_memory=pl.MemorySpace.Right)
     sij_h0_l0c = pl.matmul(qi_l0a_0, kj0_l0b)
-    _ = pl.store(sij_h0_l0c, offsets=[0, 0], output_tensor=output)
-    # Second block: qi @ kj[128:256].T -> output[:,128:256]
-    qi_l1_1 = pl.load(qi, offsets=[0, 0], shapes=[16, 128], target_memory=pl.MemorySpace.Mat)
-    kj1_l1 = pl.load(
-        kj, offsets=[0, 128], shapes=[128, 128], target_memory=pl.MemorySpace.Mat, transpose=True
-    )
-    qi_l0a_1 = pl.move(qi_l1_1, target_memory=pl.MemorySpace.Left)
-    kj1_l0b = pl.move(kj1_l1, target_memory=pl.MemorySpace.Right)
-    sij_h1_l0c = pl.matmul(qi_l0a_1, kj1_l0b)
-    out = pl.store(sij_h1_l0c, offsets=[0, 128], output_tensor=output)
+    out = pl.store(sij_h0_l0c, offsets=[0, 0], output_tensor=output)
     return out
 
 
@@ -445,18 +435,27 @@ def build_paged_attention_multitier_program(
     block_size: int,
     max_num_blocks_per_req: int,
     q_tile: int = 16,
+    assume_contiguous_blocks: bool = False,
 ):
     """Build a parameterised paged-attention @pl.program with x2/x1 bn-loop tiers.
 
     Same signature as build_paged_attention_program but uses a 2-tier loop
-    structure. The x2 tier processes two physically-contiguous blocks per outer
-    iteration using a single 2-block kernel call (kernel_qk_matmul_2block,
-    kernel_softmax_prepare_2block, kernel_pv_matmul_2block).  The blocks must be
-    physically contiguous in the KV-cache pool (bidx_x2_1 == bidx_x2_0 + 1),
-    which is guaranteed by the sequential block_table layout used in tests.
+    structure when ``assume_contiguous_blocks=True``.
 
-      n2   = bn_this_batch // 2          # x2 iterations (1 × 2-block call each)
-      end2 = n2 * 2
+    The x2 tier processes two physically-contiguous blocks per outer iteration
+    using a single 2-block kernel call (kernel_qk_matmul_2block,
+    kernel_softmax_prepare_2block, kernel_pv_matmul_2block).  The blocks must
+    be physically contiguous in the KV-cache pool
+    (bidx_x2_1 == bidx_x2_0 + 1).
+
+    When ``assume_contiguous_blocks=False`` (the default), the x2 tier is
+    disabled and all blocks are processed via x1 (single-block) kernels.
+    This is safe for any block_table layout.  The PyPTO DSL does not allow
+    runtime if/else branches with different tensor shapes, so runtime
+    contiguity checking with a 2-block fallback is not feasible.
+
+      n2   = bn_this_batch // 2          # x2 iterations (only if contiguous)
+      end2 = n2 * 2                      # 0 when assume_contiguous_blocks=False
 
       for bn2 in pl.range(0,    end2,          2):  # kernelx2 (2-block kernel)
           kernel_*_2block(blocks bn2 and bn2+1, joint softmax)
@@ -465,12 +464,17 @@ def build_paged_attention_multitier_program(
 
     Parameters
     ----------
-    batch:                  number of requests in the batch
-    num_heads:              number of query heads
-    head_dim:               per-head feature dimension
-    block_size:             KV-cache block size (rows per physical block)
-    max_num_blocks_per_req: maximum number of KV blocks per request
-    q_tile:                 query-head tile size used by the InCore kernels
+    batch:                    number of requests in the batch
+    num_heads:                number of query heads
+    head_dim:                 per-head feature dimension
+    block_size:               KV-cache block size (rows per physical block)
+    max_num_blocks_per_req:   maximum number of KV blocks per request
+    q_tile:                   query-head tile size used by the InCore kernels
+    assume_contiguous_blocks: if True, assume consecutive logical blocks map to
+                              physically adjacent KV-cache rows and enable the
+                              x2 (2-block) tier.  If False (default), all blocks
+                              are processed via x1 kernels, which is correct for
+                              any block_table layout.
     """
     # Derived static dimension values for tensor type annotations
     query_rows = batch * num_heads
@@ -480,6 +484,10 @@ def build_paged_attention_multitier_program(
 
     # Compile-time q-loop bound: q_idx iterates over q_tile groups of heads
     q_loop_static = (num_heads + q_tile - 1) // q_tile
+
+    # Compile-time scale for x2 tier: 2 when contiguous blocks assumed, 0 otherwise.
+    # Used inside @pl.function to avoid Python if-statements in the DSL body.
+    contiguous_scale = 2 if assume_contiguous_blocks else 0
 
     @pl.program
     class PagedAttentionMultitierProgram:
@@ -508,12 +516,14 @@ def build_paged_attention_multitier_program(
         ) -> pl.Tensor[[out_rows, head_dim], pl.FP32]:
             """Paged attention orchestration with 2-tier bn loop (x2 / x1).
 
-            The x2 tier processes pairs (bn2, bn2+1) per outer iteration using
-            a single 2-block kernel call (kernel_qk_matmul_2block,
-            kernel_softmax_prepare_2block, kernel_pv_matmul_2block), which
-            computes a joint softmax over valid_0 + valid_1 tokens from both
-            blocks.  Physical contiguity (bidx_x2_1 == bidx_x2_0 + 1) is
-            assumed and guaranteed by the sequential block_table.
+            When assume_contiguous_blocks=True, the x2 tier processes pairs
+            (bn2, bn2+1) per outer iteration using a single 2-block kernel
+            call, which computes a joint softmax over valid_0 + valid_1 tokens
+            from both blocks.  Physical contiguity
+            (bidx_x2_1 == bidx_x2_0 + 1) must be guaranteed by the caller.
+
+            When assume_contiguous_blocks=False, the x2 tier is disabled
+            (end2 = 0) and all blocks go through x1 single-block kernels.
 
             Tier boundaries (runtime scalars):
               n2   = bn_this_batch // 2              end2 = n2 * 2
@@ -538,8 +548,13 @@ def build_paged_attention_multitier_program(
                 bn_this_batch = (cur_seq + block_size_cfg - 1) // block_size_cfg
 
                 # ── Compute tier boundaries (runtime scalars) ──────────────────
+                # contiguous_scale is a compile-time Python int (0 or 2).
+                # When assume_contiguous_blocks=False: end2 = n2 * 0 = 0 → x2 loop empty.
+                # When assume_contiguous_blocks=True:  end2 = n2 * 2   → original behavior.
+                # A Python-level `if` cannot be used here because the DSL's AST
+                # parser would treat it as a runtime IfStmt.
                 n2 = bn_this_batch // 2
-                end2 = n2 * 2
+                end2 = n2 * contiguous_scale
 
                 # ── Compile-time unrolled q_idx loop ──────────────────────────
                 for q_idx in pl.range(q_loop_static):
@@ -557,17 +572,20 @@ def build_paged_attention_multitier_program(
                     mi_update: pl.Tensor[[q_tile, 1], pl.FP32] = pl.create_tensor([q_tile, 1], dtype=pl.FP32)  # type: ignore[reportArgumentType]
                     oi, li_update, mi_update = kernel_init_inplace(oi, li_update, mi_update)
 
-                    # ── kernelx2: step=2, contiguity check → 2-block kernel or fallback ──
+                    # qi is invariant across both bn2 and bn3 loops (cur_offset is constant)
+                    qi: pl.Tensor[[q_tile, head_dim_cfg], pl.BF16] = pl.slice(
+                        query,
+                        [q_tile, head_dim_cfg],  # type: ignore[reportArgumentType]
+                        [cur_offset, 0],
+                    )
+                    # ── kernelx2: step=2, check physical contiguity before using 2-block kernel ──
                     for bn2 in pl.range(0, end2, 2):
-                        qi_x2: pl.Tensor[[q_tile, head_dim_cfg], pl.BF16] = pl.slice(
-                            query,
-                            [q_tile, head_dim_cfg],  # type: ignore[reportArgumentType]
-                            [cur_offset, 0],
-                        )
-                        # Read both block indices from block_table
+                        # Read BOTH block indices to verify physical contiguity
                         bidx_x2_0 = pl.tensor.read(block_table, [b_idx * block_num_cfg + bn2])
                         valid_0 = pl.min(block_size_cfg, cur_seq - bn2 * block_size_cfg)
                         valid_1 = pl.min(block_size_cfg, cur_seq - (bn2 + 1) * block_size_cfg)
+
+                        # ── physically contiguous: use 2-block kernel ──────────────────
                         valid_2block = valid_0 + valid_1
                         row_pair = bidx_x2_0 * block_size_cfg
                         kj_2b: pl.Tensor[[head_dim_cfg, 2 * block_size_cfg], pl.BF16, pl.DN] = pl.slice(
@@ -584,7 +602,7 @@ def build_paged_attention_multitier_program(
                             [q_tile, 2 * block_size_cfg],  # type: ignore[reportArgumentType]
                             dtype=pl.FP32,
                         )
-                        sij_2b = kernel_qk_matmul_2block(qi_x2, kj_2b, sij_2b)
+                        sij_2b = kernel_qk_matmul_2block(qi, kj_2b, sij_2b)
                         sij_2b_valid: pl.Tensor[[q_tile, valid_2block], pl.FP32] = pl.slice(
                             sij_2b,
                             [q_tile, valid_2block],  # type: ignore[reportArgumentType]
@@ -626,11 +644,6 @@ def build_paged_attention_multitier_program(
                         )
                     # ── kernelx1: step=1, single 1-block pipeline ─────────────
                     for bn3 in pl.range(end2, bn_this_batch, 1):
-                        qi: pl.Tensor[[q_tile, head_dim_cfg], pl.BF16] = pl.slice(
-                            query,
-                            [q_tile, head_dim_cfg],  # type: ignore[reportArgumentType]
-                            [cur_offset, 0],
-                        )
                         bidx = pl.tensor.read(block_table, [b_idx * block_num_cfg + bn3])
                         valid_len = pl.min(block_size_cfg, cur_seq - bn3 * block_size_cfg)
                         row = bidx * block_size_cfg
