@@ -14,18 +14,17 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "pypto/core/any_cast.h"
 #include "pypto/core/error.h"
 #include "pypto/core/logging.h"
 #include "pypto/ir/expr.h"
 #include "pypto/ir/function.h"
 #include "pypto/ir/kind_traits.h"
 #include "pypto/ir/memref.h"
+#include "pypto/ir/op_registry.h"
 #include "pypto/ir/program.h"
 #include "pypto/ir/scalar_expr.h"
 #include "pypto/ir/span.h"
@@ -43,29 +42,34 @@ namespace ir {
 
 namespace {
 
-// Helper to extract target_memory from Call kwargs
-MemorySpace ExtractTargetMemory(const CallPtr& call) {
-  for (const auto& [key, value] : call->kwargs_) {
-    if (key == "target_memory") {
-      return AnyCast<MemorySpace>(value, "target_memory");
-    }
+// Resolve memory space for tile op output using registry metadata.
+// tile.store is special-cased since it returns TensorType (DDR), not TileType.
+MemorySpace ResolveMemorySpace(const std::string& op_name, const CallPtr& call) {
+  if (op_name == "tile.store") return MemorySpace::DDR;
+
+  auto& registry = OpRegistry::GetInstance();
+  if (!registry.IsRegistered(op_name)) return MemorySpace::Vec;
+
+  const auto& spec_opt = registry.GetEntry(op_name).GetMemorySpec();
+  if (!spec_opt.has_value() || !spec_opt->deduce_output_memory) {
+    return MemorySpace::Vec;
   }
-  // If target_memory not found, default to Vec
-  return MemorySpace::Vec;
+
+  auto result = spec_opt->deduce_output_memory(call->kwargs_);
+  return result.value_or(MemorySpace::Vec);
 }
 
-// Return value memory space rules for tile operators
-const std::map<std::string, std::optional<MemorySpace>> kTileOpMemoryRules = {
-    {"tile.create", std::nullopt},          // Extract from target_memory
-    {"tile.load", std::nullopt},            // Extract from target_memory
-    {"tile.move", std::nullopt},            // Extract from target_memory
-    {"tile.store", MemorySpace::DDR},       // Fixed DDR
-    {"tile.matmul", MemorySpace::Acc},      // Fixed Acc
-    {"tile.matmul_acc", MemorySpace::Acc},  // Fixed Acc
-};
+// Check if operation is a view operation (zero-copy metadata transform)
+// using the registry: deduce_output_memory returning nullopt = view op.
+bool IsViewOperation(const std::string& op_name) {
+  auto& registry = OpRegistry::GetInstance();
+  if (!registry.IsRegistered(op_name)) return false;
 
-// Helper to check if operation is a view operation (zero-copy metadata transform)
-bool IsViewOperation(const std::string& op_name) { return op_name == "tile.reshape"; }
+  const auto& spec_opt = registry.GetEntry(op_name).GetMemorySpec();
+  if (!spec_opt.has_value() || !spec_opt->deduce_output_memory) return false;
+
+  return !spec_opt->deduce_output_memory({}).has_value();
+}
 
 // Helper to find the YieldStmt inside a statement body (searches through SeqStmts/OpStmts)
 YieldStmtPtr FindYieldStmt(const StmtPtr& body) {
@@ -103,26 +107,7 @@ class MemRefUsageVisitor : public IRVisitor {
       // Check if this is a tile operation (op name starts with "tile.")
       const std::string& op_name = call->op_->name_;
       if (op_name.rfind("tile.", 0) == 0) {
-        // Look up memory assignment rules for this operator
-        auto it = kTileOpMemoryRules.find(op_name);
-        MemorySpace space;
-
-        if (it != kTileOpMemoryRules.end()) {
-          // Operator in rules table
-          const auto& mem_space_opt = it->second;
-          if (mem_space_opt.has_value()) {
-            // Fixed memory space
-            space = mem_space_opt.value();
-          } else {
-            // Extract from target_memory kwarg
-            space = ExtractTargetMemory(call);
-          }
-        } else {
-          // Block operation not in rules table, default to Vec
-          space = MemorySpace::Vec;
-        }
-
-        var_memory_spaces_[op->var_] = space;
+        var_memory_spaces_[op->var_] = ResolveMemorySpace(op_name, call);
       }
     }
     // Continue with default traversal
@@ -240,19 +225,33 @@ class InitMemRefMutator : public IRMutator {
   }
 
   // Clone a type with specified MemRef (handles TensorType and TileType)
-  TypePtr CloneTypeWithMemRef(const TypePtr& original_type, const std::optional<MemRefPtr>& memref) {
+  TypePtr CloneTypeWithMemRef(const TypePtr& original_type, const std::optional<MemRefPtr>& memref,
+                              std::optional<MemorySpace> memory_space_override = std::nullopt) {
     if (auto tensor_type = std::dynamic_pointer_cast<const TensorType>(original_type)) {
       return std::make_shared<TensorType>(tensor_type->shape_, tensor_type->dtype_, memref,
                                           tensor_type->tensor_view_);
     }
 
     if (auto tile_type = std::dynamic_pointer_cast<const TileType>(original_type)) {
+      auto tile_memory_space =
+          tile_type->memory_space_.has_value() ? tile_type->memory_space_ : memory_space_override;
       return std::make_shared<TileType>(tile_type->shape_, tile_type->dtype_, memref, tile_type->tile_view_,
-                                        tile_type->memory_space_);
+                                        tile_memory_space);
     }
 
     // For non-ShapedTypes, return as-is
     return original_type;
+  }
+
+  std::optional<MemorySpace> GetTileMemorySpaceForVar(const VarPtr& var) const {
+    if (!var) {
+      return std::nullopt;
+    }
+    auto it = var_memory_spaces_.find(var);
+    if (it == var_memory_spaces_.end()) {
+      return std::nullopt;
+    }
+    return it->second;
   }
 
   // Extract MemRef from ShapedType (TensorType or TileType)
@@ -268,6 +267,14 @@ class InitMemRefMutator : public IRMutator {
     return std::nullopt;
   }
 
+  std::optional<MemorySpace> ExtractMemorySpaceFromType(const TypePtr& type) {
+    auto shaped_type = std::dynamic_pointer_cast<const ShapedType>(type);
+    if (!shaped_type) {
+      return std::nullopt;
+    }
+    return shaped_type->GetMemorySpace();
+  }
+
   // Process IterArg variable (inherits MemRef from initValue)
   VarPtr ProcessIterArg(const VarPtr& old_var) {
     auto iter_arg = std::static_pointer_cast<const IterArg>(old_var);
@@ -278,7 +285,8 @@ class InitMemRefMutator : public IRMutator {
     // Extract MemRef from initValue and create new type
     auto memref = ExtractMemRefFromType(new_init->GetType());
     auto old_var_expr = std::static_pointer_cast<const Expr>(old_var);
-    TypePtr new_type = CloneTypeWithMemRef(old_var_expr->GetType(), memref);
+    auto source_memory_space = ExtractMemorySpaceFromType(new_init->GetType());
+    TypePtr new_type = CloneTypeWithMemRef(old_var_expr->GetType(), memref, source_memory_space);
 
     return std::make_shared<IterArg>(iter_arg->name_, new_type, new_init, iter_arg->span_);
   }
@@ -291,7 +299,7 @@ class InitMemRefMutator : public IRMutator {
     // Process Type if it is ShapedType (TensorType or TileType)
     if (auto shaped_type = std::dynamic_pointer_cast<const ShapedType>(var_expr->GetType())) {
       auto memref = CreateMemRef(shaped_type, var);
-      new_type = CloneTypeWithMemRef(var_expr->GetType(), memref);
+      new_type = CloneTypeWithMemRef(var_expr->GetType(), memref, GetTileMemorySpaceForVar(var));
     }
 
     return std::make_shared<Var>(var->name_, new_type, var->span_);
@@ -351,7 +359,8 @@ class InitMemRefMutator : public IRMutator {
           // Create new variable with shared MemRef
           if (shared_memref.has_value()) {
             LOG_DEBUG << "Sharing MemRef from input tile to " << op->var_->name_;
-            TypePtr new_type = CloneTypeWithMemRef(op->var_->GetType(), shared_memref);
+            auto source_memory_space = ExtractMemorySpaceFromType(input_tile_arg->GetType());
+            TypePtr new_type = CloneTypeWithMemRef(op->var_->GetType(), shared_memref, source_memory_space);
             VarPtr new_var = std::make_shared<Var>(op->var_->name_, new_type, op->var_->span_);
             var_map_[op->var_] = new_var;
 
@@ -374,7 +383,8 @@ class InitMemRefMutator : public IRMutator {
 
           // Create new variable with the shared MemRef
           if (shared_memref.has_value()) {
-            TypePtr new_type = CloneTypeWithMemRef(op->var_->GetType(), shared_memref);
+            TypePtr new_type =
+                CloneTypeWithMemRef(op->var_->GetType(), shared_memref, GetTileMemorySpaceForVar(op->var_));
 
             VarPtr new_var = std::make_shared<Var>(op->var_->name_, new_type, op->var_->span_);
             var_map_[op->var_] = new_var;
@@ -413,7 +423,8 @@ class InitMemRefMutator : public IRMutator {
       auto rv_tile = As<TileType>(new_for->return_vars_[i]->GetType());
       auto ia_tile = As<TileType>(new_for->iter_args_[i]->GetType());
       if (rv_tile && ia_tile && ia_tile->memref_.has_value()) {
-        auto new_type = CloneTypeWithMemRef(new_for->return_vars_[i]->GetType(), ia_tile->memref_);
+        auto new_type = CloneTypeWithMemRef(new_for->return_vars_[i]->GetType(), ia_tile->memref_,
+                                            ia_tile->GetMemorySpace());
         auto new_rv =
             std::make_shared<Var>(new_for->return_vars_[i]->name_, new_type, new_for->return_vars_[i]->span_);
         // Update the cache so downstream references use the patched var
@@ -442,12 +453,14 @@ class InitMemRefMutator : public IRMutator {
 // Visitor to collect unique non-DDR MemRef objects from TileType variables
 class NonDDRMemRefCollector : public IRVisitor {
  public:
-  [[nodiscard]] const std::vector<MemRefPtr>& GetMemRefs() const { return memrefs_; }
+  using MemRefAlloc = std::pair<MemRefPtr, MemorySpace>;
+
+  [[nodiscard]] const std::vector<MemRefAlloc>& GetMemRefs() const { return memrefs_; }
 
   void VisitExpr_(const VarPtr& op) override {
     if (auto tile_type = As<TileType>(op->GetType())) {
       if (tile_type->memref_.has_value()) {
-        AddMemRefIfUnique(tile_type->memref_.value());
+        AddMemRefIfUnique(tile_type);
       }
     }
   }
@@ -455,31 +468,40 @@ class NonDDRMemRefCollector : public IRVisitor {
   void VisitExpr_(const IterArgPtr& op) override {
     if (auto tile_type = As<TileType>(op->GetType())) {
       if (tile_type->memref_.has_value()) {
-        AddMemRefIfUnique(tile_type->memref_.value());
+        AddMemRefIfUnique(tile_type);
       }
     }
   }
 
  private:
-  std::vector<MemRefPtr> memrefs_;
-  std::set<const MemRef*> seen_ptrs_;
+  std::vector<MemRefAlloc> memrefs_;
+  std::map<const MemRef*, MemorySpace> seen_ptrs_;
 
-  void AddMemRefIfUnique(const MemRefPtr& memref) {
-    if (memref->memory_space_ == MemorySpace::DDR) return;
+  void AddMemRefIfUnique(const std::shared_ptr<const TileType>& tile_type) {
+    auto memory_space = tile_type->GetMemorySpace();
+    CHECK(memory_space.has_value())
+        << "TileType with MemRef must have memory_space before emitting tile.alloc";
+    CHECK(tile_type->memref_.has_value()) << "TileType must carry MemRef before emitting tile.alloc";
+    const MemorySpace canonical_space = memory_space.value();
+    if (canonical_space == MemorySpace::DDR) return;
+
+    const auto& memref = tile_type->memref_.value();
     const MemRef* raw_ptr = memref.get();
-    if (seen_ptrs_.find(raw_ptr) == seen_ptrs_.end()) {
-      memrefs_.push_back(memref);
-      seen_ptrs_.insert(raw_ptr);
+    auto [it, inserted] = seen_ptrs_.emplace(raw_ptr, canonical_space);
+    CHECK(inserted || it->second == canonical_space)
+        << "Conflicting TileType.memory_space values found for the same MemRef";
+    if (inserted) {
+      memrefs_.emplace_back(memref, canonical_space);
     }
   }
 };
 
 // Create tile.alloc AssignStmt for a MemRef with addr=-1 (unallocated)
-StmtPtr CreateAllocStatement(const MemRefPtr& memref) {
+StmtPtr CreateAllocStatement(const MemRefPtr& memref, MemorySpace memory_space) {
   auto alloc_op = std::make_shared<Op>("tile.alloc");
 
-  auto memspace_expr = std::make_shared<ConstInt>(static_cast<int64_t>(memref->memory_space_),
-                                                  DataType::INDEX, Span::unknown());
+  auto memspace_expr =
+      std::make_shared<ConstInt>(static_cast<int64_t>(memory_space), DataType::INDEX, Span::unknown());
   ExprPtr addr_expr = memref->addr_;
   auto size_expr =
       std::make_shared<ConstInt>(static_cast<int64_t>(memref->size_), DataType::INDEX, Span::unknown());
@@ -533,13 +555,11 @@ StmtPtr InsertAllocsIntoBody(const StmtPtr& body, const std::vector<StmtPtr>& al
  * 2. Initializes the MemRef field for all Var nodes
  * 3. Creates tile.alloc operations for non-DDR MemRefs (addr=-1, unallocated)
  *
- * Memory space assignment rules:
+ * Memory space assignment:
  * - Function parameters -> DDR
- * - tile.load/tile.move return values -> Extract from target_memory kwarg (default Vec)
- * - tile.store return values -> DDR
- * - tile.matmul/tile.matmul_acc return values -> Acc
- * - Other tile operations (not in rules table) -> Vec
- * - Other variables -> DDR (default)
+ * - tile.store return values -> DDR (special-cased, returns TensorType)
+ * - Other tile ops -> resolved via OpRegistry memory specs (see OpMemorySpaceSpec)
+ * - Non-tile variables -> DDR (default)
  */
 FunctionPtr TransformInitMemRef(const FunctionPtr& func) {
   // Step 1: Normalize statement structure to ensure SeqStmts/OpStmts
@@ -578,8 +598,8 @@ FunctionPtr TransformInitMemRef(const FunctionPtr& func) {
 
   std::vector<StmtPtr> alloc_stmts;
   alloc_stmts.reserve(memrefs.size());
-  for (const auto& memref : memrefs) {
-    alloc_stmts.push_back(CreateAllocStatement(memref));
+  for (const auto& [memref, memory_space] : memrefs) {
+    alloc_stmts.push_back(CreateAllocStatement(memref, memory_space));
   }
 
   // Step 5: Insert alloc statements into the first OpStmts

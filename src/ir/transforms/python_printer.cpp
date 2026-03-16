@@ -366,15 +366,12 @@ std::string IRPythonPrinter::Print(const TypePtr& type) {
       oss << ", " << PrintMemRef(*tile_type->memref_.value());
     }
 
-    // Add optional memory_space as positional arg
     if (tile_type->memory_space_.has_value()) {
       auto mem_str = MemorySpaceToString(tile_type->memory_space_.value());
-      oss << ", " << prefix_ << ".MemorySpace." << mem_str;
+      oss << ", " << prefix_ << ".Mem." << mem_str;
     }
 
     // Add optional tile_view parameter if present and non-trivial.
-    // A trivial tile_view (valid_shape==shape, all other defaults) is omitted since
-    // structural_equal treats it as equivalent to no tile_view.
     if (tile_type->tile_view_.has_value()) {
       auto tv_str = PrintTileView(tile_type->tile_view_.value(), tile_type->shape_);
       if (!tv_str.empty()) {
@@ -520,7 +517,7 @@ void IRPythonPrinter::VisitExpr_(const CallPtr& op) {
     VisitExpr(op->args_[2]);  // shapes
     stream_ << ", ";
     VisitExpr(op->args_[2]);  // valid_shapes = shapes (default)
-    stream_ << ", target_memory=" << prefix_ << ".MemorySpace.Vec, transpose=False)";
+    stream_ << ", target_memory=" << prefix_ << ".Mem.Vec, transpose=False)";
     return;
   }
 
@@ -533,7 +530,7 @@ void IRPythonPrinter::VisitExpr_(const CallPtr& op) {
       // Try to extract the integer value and convert it to MemorySpace enum
       if (auto const_int = std::dynamic_pointer_cast<const ConstInt>(op->args_[i])) {
         int space_value = static_cast<int>(const_int->value_);
-        stream_ << prefix_ << ".MemorySpace." << MemorySpaceToString(static_cast<MemorySpace>(space_value));
+        stream_ << prefix_ << ".Mem." << MemorySpaceToString(static_cast<MemorySpace>(space_value));
       } else {
         VisitExpr(op->args_[i]);
       }
@@ -573,7 +570,7 @@ void IRPythonPrinter::VisitExpr_(const CallPtr& op) {
     } else if (value.type() == typeid(DataType)) {
       stream_ << prefix_ << "." << DataTypeToString(AnyCast<DataType>(value, "printing kwarg: " + key));
     } else if (value.type() == typeid(MemorySpace)) {
-      stream_ << prefix_ << ".MemorySpace."
+      stream_ << prefix_ << ".Mem."
               << MemorySpaceToString(AnyCast<MemorySpace>(value, "printing kwarg: " + key));
     } else if (value.type() == typeid(TensorLayout)) {
       stream_ << prefix_ << ".TensorLayout."
@@ -1463,16 +1460,8 @@ void IRPythonPrinter::PrintShapeDims(std::ostringstream& oss, const std::vector<
 
 // Helper methods for MemRef and TileView printing
 std::string IRPythonPrinter::PrintMemRef(const MemRef& memref) {
-  // Non-DDR memrefs have corresponding tile.alloc statements that define them
-  // as variables, so reference the variable name instead of repeating the
-  // full inline form.
-  if (memref.memory_space_ != MemorySpace::DDR) {
-    return memref.name_;
-  }
-
   std::ostringstream oss;
-  oss << prefix_ << ".MemRef(" << prefix_ << ".MemorySpace." << MemorySpaceToString(memref.memory_space_)
-      << ", ";
+  oss << prefix_ << ".MemRef(";
 
   // Print address expression
   IRPythonPrinter temp_printer(prefix_);

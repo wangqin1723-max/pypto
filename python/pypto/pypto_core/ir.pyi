@@ -10,7 +10,7 @@
 
 import enum
 from collections.abc import Mapping, Sequence
-from typing import Final, overload
+from typing import Any, Final, overload
 
 from pypto import DataType
 
@@ -305,6 +305,11 @@ class ShapedType(Type):
 
     memref: Final[MemRef | None]
     """Optional memory reference."""
+
+    @property
+    def memory_space(self) -> MemorySpace | None:
+        """Canonical memory space for this shaped type."""
+        ...
 
     def shares_memref_with(self, other: ShapedType) -> bool:
         """Check if this ShapedType shares the same MemRef object with another ShapedType.
@@ -753,11 +758,11 @@ class MemorySpace(enum.Enum):
     Bias = ...
     """Bias buffer."""
 
+Mem = MemorySpace
+"""Short alias for MemorySpace (e.g., Mem.Vec instead of MemorySpace.Vec)."""
+
 class MemRef(Var):
     """Memory reference variable for shaped types (inherits from Var)."""
-
-    memory_space_: MemorySpace
-    """Memory space (DDR, Vec, Mat, etc.)."""
 
     addr_: Expr
     """Starting address expression."""
@@ -768,11 +773,16 @@ class MemRef(Var):
     id_: int
     """Unique identifier for this MemRef instance."""
 
-    def __init__(self, memory_space: MemorySpace, addr: Expr, size: int, id: int, span: Span = ...) -> None:
-        """Create a memory reference with memory_space, addr, size, id, and span.
+    @overload
+    def __init__(self, addr: Expr, size: int, id: int, span: Span = ...) -> None: ...
+    @overload
+    def __init__(
+        self, memory_space: MemorySpace, addr: Expr, size: int, id: int, span: Span = ...
+    ) -> None: ...
+    def __init__(self, *args, **kwargs) -> None:
+        """Create a memory reference with addr, size, id, and span.
 
         Args:
-            memory_space: Memory space (DDR, Vec, Mat, etc.)
             addr: Starting address expression
             size: Size in bytes
             id: Unique identifier for this MemRef instance
@@ -2154,6 +2164,18 @@ def get_op(op_name: str) -> Op:
         Exception: If operator is not registered
     """
 
+def get_op_memory_spec(op_name: str) -> dict[str, Any] | None:
+    """Get memory space specification for a registered operator.
+
+    Args:
+        op_name: Name of the operator
+
+    Returns:
+        Dict with 'input_constraints' (list of lists of MemorySpace) and
+        'output_memory' (MemorySpace, 'inherit_from_input', or None) keys,
+        or None if the operator has no memory spec or is not registered.
+    """
+
 # ========== Op Conversion Registry ==========
 
 def register_op_conversion(from_op: str, to_op: str) -> None:
@@ -2747,3 +2769,17 @@ class ParentStmtAnalysis:
         Removes all recorded parent-child relationships. Useful for reusing
         the same ParentStmtAnalysis instance with different functions.
         """
+
+def deep_clone(body: Stmt) -> tuple[Stmt, list[tuple[Var, Var]]]:
+    """Deep-clone a statement subtree, creating fresh Var objects at definition sites.
+
+    All Var, IterArg, and MemRef objects at definition sites inside the statement
+    tree are freshly created to avoid shared identity with the original.
+
+    Args:
+        body: The statement subtree to clone
+
+    Returns:
+        Tuple of (cloned_body, var_map) where var_map is a list of
+        (original_var, cloned_var) pairs for definition-site clones.
+    """

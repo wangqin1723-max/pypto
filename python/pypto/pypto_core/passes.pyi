@@ -21,7 +21,7 @@ class IRProperty(Enum):
     TypeChecked = ...
     NoNestedCalls = ...
     NormalizedStmtStructure = ...
-    FlattenedSingleStmt = ...
+    NoRedundantBlocks = ...
     SplitIncoreOrch = ...
     HasMemRefs = ...
     IncoreTileOps = ...
@@ -271,9 +271,6 @@ def flatten_call_expr() -> Pass:
 def normalize_stmt_structure() -> Pass:
     """Create a pass that normalizes statement structure."""
 
-def flatten_single_stmt() -> Pass:
-    """Create a pass that flattens single-statement blocks."""
-
 class NestedCallErrorType(Enum):
     """Nested call verification error types."""
 
@@ -348,7 +345,6 @@ __all__ = [
     "expand_mixed_kernel",
     "flatten_call_expr",
     "normalize_stmt_structure",
-    "flatten_single_stmt",
     "NestedCallErrorType",
     "DiagnosticSeverity",
     "Diagnostic",

@@ -45,7 +45,7 @@ void BindPass(nb::module_& m) {
       .value("TypeChecked", IRProperty::TypeChecked, "IR has passed type checking")
       .value("NoNestedCalls", IRProperty::NoNestedCalls, "No nested call expressions")
       .value("NormalizedStmtStructure", IRProperty::NormalizedStmtStructure, "Statement structure normalized")
-      .value("FlattenedSingleStmt", IRProperty::FlattenedSingleStmt, "Single-statement blocks flattened")
+      .value("NoRedundantBlocks", IRProperty::NoRedundantBlocks, "No single-child or nested SeqStmts/OpStmts")
       .value("SplitIncoreOrch", IRProperty::SplitIncoreOrch, "InCore scopes outlined into separate functions")
       .value("HasMemRefs", IRProperty::HasMemRefs, "MemRef objects initialized on variables")
       .value("IncoreTileOps", IRProperty::IncoreTileOps,
@@ -245,9 +245,6 @@ void BindPass(nb::module_& m) {
              "Create a pass that flattens nested call expressions");
   passes.def("normalize_stmt_structure", &pass::NormalizeStmtStructure,
              "Create a pass that normalizes statement structure");
-  passes.def("flatten_single_stmt", &pass::FlattenSingleStmt,
-             "Create a pass that recursively flattens single-statement blocks");
-
   // Bind DiagnosticSeverity enum
   nb::enum_<DiagnosticSeverity>(passes, "DiagnosticSeverity", "Severity level for diagnostics")
       .value("Error", DiagnosticSeverity::Error, "Error that must be fixed")

@@ -854,6 +854,7 @@ static const SimpleOpEntry kSimpleOps[] = {
     {"tile.col_max",         "pto.tcolmax",          1},
     {"tile.col_min",         "pto.tcolmin",          1},
     {"tile.col_expand",      "pto.tcolexpand",       2},
+    {"tile.col_expand_mul",  "pto.tcolexpandmul",    2},
     {"tile.row_expand_div",  "pto.trowexpanddiv",    2},
     {"tile.row_expand_mul",  "pto.trowexpandmul",    2},
     {"tile.row_expand_sub",  "pto.trowexpandsub",    2},
@@ -864,10 +865,10 @@ static const SimpleOpEntry kSimpleOps[] = {
     {"tile.matmul_mx",       "pto.tmatmul.mx",       4},
     {"tile.matmul_mx_acc",   "pto.tmatmul.mx.acc",   5},
     {"tile.matmul_mx_bias",  "pto.tmatmul.mx.bias",  5},
-    {"tile.matmul_acc",      "pto.tmatmul.acc",      3},
+    // tile.matmul_acc and tile.gemv_acc have custom codegen (in-place accumulation)
     {"tile.matmul_bias",     "pto.tmatmul.bias",     3},
     {"tile.gemv",            "pto.tgemv",            2},
-    {"tile.gemv_acc",        "pto.tgemv.acc",        3},
+    // tile.gemv_acc has custom codegen (in-place accumulation)
     {"tile.gemv_bias",       "pto.tgemv.bias",       3},
     // Data movement/layout operations
     {"tile.move",            "pto.tmov",             1},
@@ -965,6 +966,67 @@ void RegisterPTOOps(Backend& backend, const std::unordered_set<std::string>& exc
   reg("tile.print", [](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
     return MakePrintCodegenPTO("pto.tprint", op, codegen);
   });
+
+  // In-place accumulation ops (matmul_acc, gemv_acc): the CUBE engine
+  // accumulates into the output buffer, NOT from a separate accumulator input.
+  // When memory reuse cannot merge c_in and c_out (touching lifetimes treated
+  // as overlapping), they get separate buffers.  We emit a pto.tmov to copy
+  // c_in → c_out so the hardware reads the correct accumulator value.
+  auto make_acc_codegen = [](const std::string& pto_op) {
+    return [pto_op](const ir::CallPtr& op, codegen::CodegenBase& codegen_base) -> std::string {
+      auto& codegen = dynamic_cast<codegen::PTOCodegen&>(codegen_base);
+      CHECK(op->args_.size() == 3) << pto_op << " requires 3 arguments: acc, lhs, rhs";
+
+      std::string acc = codegen.GetExprAsCode(op->args_[0]);
+      std::string dst = codegen.GetCurrentResultTarget();
+
+      // Copy accumulator to output buffer when they differ
+      if (acc != dst) {
+        std::string acc_type = codegen.GetExprTypeAnnotation(op->args_[0]);
+        std::string dst_type = codegen.GetCurrentResultTileBufTypeString();
+        std::ostringstream mov;
+        mov << "pto.tmov ins(" << acc;
+        if (!acc_type.empty()) mov << " : " << acc_type;
+        mov << ") outs(" << dst;
+        if (!dst_type.empty()) mov << " : " << dst_type;
+        mov << ")";
+        codegen.Emit(mov.str());
+      }
+
+      // Emit the accumulation instruction with dst (accumulator), lhs, rhs
+      // as ins() operands.  ptoas expects all three in ins(); the hardware
+      // reads the accumulator from the output buffer, but the MLIR op still
+      // models it as an input for correct data-flow tracking.
+      std::string lhs = codegen.GetExprAsCode(op->args_[1]);
+      std::string rhs = codegen.GetExprAsCode(op->args_[2]);
+      std::string dst_type = codegen.GetCurrentResultTileBufTypeString();
+      std::string lhs_type = codegen.GetExprTypeAnnotation(op->args_[1]);
+      std::string rhs_type = codegen.GetExprTypeAnnotation(op->args_[2]);
+
+      std::ostringstream acc_inst;
+      acc_inst << pto_op << " ins(" << dst << ", " << lhs << ", " << rhs;
+      std::string ins_types;
+      if (!dst_type.empty()) ins_types += dst_type;
+      if (!lhs_type.empty()) {
+        if (!ins_types.empty()) ins_types += ", ";
+        ins_types += lhs_type;
+      }
+      if (!rhs_type.empty()) {
+        if (!ins_types.empty()) ins_types += ", ";
+        ins_types += rhs_type;
+      }
+      if (!ins_types.empty()) acc_inst << " : " << ins_types;
+      acc_inst << ") outs(" << dst;
+      if (!dst_type.empty()) acc_inst << " : " << dst_type;
+      acc_inst << ")";
+      codegen.Emit(acc_inst.str());
+      return "";
+    };
+  };
+
+  reg("tile.matmul_acc", make_acc_codegen("pto.tmatmul.acc"));
+  reg("tile.gemv_acc", make_acc_codegen("pto.tgemv.acc"));
+
   reg("tensor.dim", [](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
     return MakeTensorDimCodegenPTO(op, codegen);
   });
@@ -1032,13 +1094,55 @@ void RegisterPTOOps(Backend& backend, const std::unordered_set<std::string>& exc
 
     return std::string("");
   });
+  reg("tile.slice", [](const ir::CallPtr& op, codegen::CodegenBase& codegen_base) {
+    auto& codegen = dynamic_cast<codegen::PTOCodegen&>(codegen_base);
+    CHECK(op->args_.size() == 3)
+        << "Operation:[tile.slice] requires 3 arguments (tile, shape, offset), but got " << op->args_.size();
+
+    std::string src = codegen.GetExprAsCode(op->args_[0]);
+    std::string src_type = codegen.GetExprTypeAnnotation(op->args_[0]);
+
+    auto offset_tuple = ir::As<ir::MakeTuple>(op->args_[2]);
+    INTERNAL_CHECK(offset_tuple) << "tile.slice third argument must be a tuple (offset)";
+    INTERNAL_CHECK(offset_tuple->elements_.size() >= 2)
+        << "tile.slice offset tuple must have at least 2 elements (row, col), got "
+        << offset_tuple->elements_.size();
+    std::string row_off = codegen.GetExprAsCode(offset_tuple->elements_[0]);
+    std::string col_off = codegen.GetExprAsCode(offset_tuple->elements_[1]);
+
+    std::string result_target = codegen.GetCurrentResultTarget();
+    std::string result_type = codegen.GetCurrentResultTileBufTypeStringFromTileType();
+
+    if (src == result_target && !result_type.empty()) {
+      result_target = codegen.NewTemp();
+      codegen.SetCurrentResultBuf(result_target);
+    }
+    if (!result_type.empty()) {
+      codegen.RegisterTileBufType(result_target, result_type);
+    }
+
+    std::ostringstream oss;
+    oss << "pto.textract ins(" << src << ", " << row_off << ", " << col_off;
+    if (!src_type.empty()) {
+      oss << " : " << src_type << ", index, index";
+    }
+    oss << ") outs(" << result_target;
+    if (!result_type.empty()) {
+      oss << " : " << result_type;
+    }
+    oss << ")";
+    codegen.Emit(oss.str());
+    return std::string("");
+  });
   reg("tile.reshape", [](const ir::CallPtr& op, codegen::CodegenBase& codegen_base) {
     auto& codegen = dynamic_cast<codegen::PTOCodegen&>(codegen_base);
     CHECK(op->args_.size() == 2) << "Operation:[tile.reshape] requires 2 arguments (tile, shape), but got "
                                  << op->args_.size();
     std::string src = codegen.GetExprAsCode(op->args_[0]);
     std::string result_target = codegen.GetCurrentResultTarget();
-    std::string result_type = codegen.GetCurrentResultTileBufTypeString();
+    // Use the TileType-based method to get the correct reshaped output type,
+    // bypassing the memref lookup which would return the pre-reshape shape.
+    std::string result_type = codegen.GetCurrentResultTileBufTypeStringFromTileType();
     // Get the correct input type directly from the source variable's TileType,
     // bypassing the memref_to_tile_type_ lookup which may return the wrong shape
     // when input and output share the same MemRef.

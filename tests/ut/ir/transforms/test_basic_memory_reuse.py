@@ -108,9 +108,11 @@ class TestBasicMemoryReuse:
     """Tests for BasicMemoryReusePass with TileType variables."""
 
     def test_simple(self):
-        """tile_d reuses tile_a, tile_e reuses tile_b (transitive conflict prevents both from tile_a).
+        """tile_c, tile_d, tile_e all chain-reuse tile_a; tile_b remains independent.
 
         Lifetimes: tile_a[0,2], tile_b[1,2], tile_c[2,3], tile_d[3,4], tile_e[4,5]
+        Touching lifetimes (end == start) are non-overlapping, so tile_c reuses
+        tile_a at the boundary, and tile_d and tile_e continue the chain.
         """
 
         @pl.program
@@ -133,13 +135,15 @@ class TestBasicMemoryReuse:
         func = _prepare_and_run_memory_reuse(Before)
 
         _assert_all_have_memrefs(func)
+        _assert_shares_memref(func, "tile_a", "tile_c")
         _assert_shares_memref(func, "tile_a", "tile_d")
-        _assert_shares_memref(func, "tile_b", "tile_e")
+        _assert_shares_memref(func, "tile_a", "tile_e")
 
     def test_sequential(self):
-        """Sequential chain: tile_c reuses tile_a, tile_d reuses tile_b, tile_e reuses tile_c.
+        """Sequential chain: all tiles reuse tile_a (producer-consumer at same statement).
 
         Lifetimes: tile_a[0,1], tile_b[1,2], tile_c[2,3], tile_d[3,4], tile_e[4,5]
+        Each consumer's def equals its input's last_use, so all chain to tile_a.
         """
 
         @pl.program
@@ -221,7 +225,7 @@ class TestBasicMemoryReuse:
         assert func.name == "main"
 
     def test_memref_sharing(self):
-        """Chain: tile_c reuses tile_a, tile_d reuses tile_b.
+        """Chain: all tiles reuse tile_a (producer-consumer at same statement).
 
         Lifetimes: tile_a[0,1], tile_b[1,2], tile_c[2,3], tile_d[3,4]
         """
@@ -248,9 +252,10 @@ class TestBasicMemoryReuse:
         _assert_shares_memref(func, "tile_b", "tile_d")
 
     def test_with_dependencies(self):
-        """tile_d reuses tile_a, tile_e reuses tile_b (transitive conflict).
+        """tile_c, tile_d, tile_e all chain-reuse tile_a; tile_b remains independent.
 
         Lifetimes: tile_a[0,2], tile_b[1,2], tile_c[2,3], tile_d[3,4], tile_e[4,5]
+        Same as test_simple — touching lifetimes form a non-overlapping chain.
         """
 
         @pl.program
@@ -273,14 +278,18 @@ class TestBasicMemoryReuse:
         func = _prepare_and_run_memory_reuse(Before)
 
         _assert_all_have_memrefs(func)
+        _assert_shares_memref(func, "tile_a", "tile_c")
         _assert_shares_memref(func, "tile_a", "tile_d")
-        _assert_shares_memref(func, "tile_b", "tile_e")
+        _assert_shares_memref(func, "tile_a", "tile_e")
 
     def test_transitive_conflict(self):
         """Transitive conflict: tile_c and tile_d must NOT share memory.
 
         Lifetimes: tile_a[0,1], tile_b[1,2], tile_c[2,4], tile_d[3,4], tile_e[4,5]
-        tile_c reuses tile_a, tile_d reuses tile_b (not tile_a, conflict with tile_c).
+        tile_b reuses tile_a (touching at 1). tile_c reuses tile_a (touching at 2,
+        checked against tile_b which is also non-overlapping). tile_d cannot reuse
+        tile_a (conflict with tile_c[2,4]) or tile_b (same root, conflict with tile_c).
+        tile_e reuses tile_a (tile_c[2,4] touches tile_e[4,5] at 4).
         """
 
         @pl.program
@@ -302,9 +311,10 @@ class TestBasicMemoryReuse:
         func = _prepare_and_run_memory_reuse(Before)
 
         _assert_all_have_memrefs(func)
+        _assert_shares_memref(func, "tile_a", "tile_b")
         _assert_shares_memref(func, "tile_a", "tile_c")
-        _assert_shares_memref(func, "tile_b", "tile_d")
         _assert_not_shares_memref(func, "tile_c", "tile_d")
+        _assert_shares_memref(func, "tile_a", "tile_e")
 
     def test_multiple_memory_spaces(self):
         """Memory reuse happens within the same memory space (UB tiles).
@@ -425,8 +435,9 @@ class TestAllocCleanup:
     def test_unused_alloc_removed_after_reuse(self):
         """Alloc stmts for MemRefs replaced by reuse should be removed.
 
-        Lifetimes: tile_a[0,1], tile_b[1,2], tile_c[2,3]
-        tile_c reuses tile_a → memref_c alloc removed → 2 allocs remain.
+        Lifetimes: tile_a[3,4], tile_b[4,5], tile_c[5,6]
+        With touching-lifetime reuse, tile_b reuses tile_a and tile_c
+        reuses tile_a (chain) → all share one MemRef → 1 alloc remains.
         """
         prog = _build_program_with_allocs(
             tile_specs=[("tile_a", 10), ("tile_b", 11), ("tile_c", 12)],
@@ -443,20 +454,22 @@ class TestAllocCleanup:
         after = passes.basic_memory_reuse()(prog)
         func = list(after.functions.values())[0]
 
-        assert _count_alloc_stmts(func) == 2, (
-            f"Expected 2 alloc stmts after reuse, got {_count_alloc_stmts(func)}"
+        assert _count_alloc_stmts(func) == 1, (
+            f"Expected 1 alloc stmt after chain reuse, got {_count_alloc_stmts(func)}"
         )
 
         alloc_ids = _get_alloc_memref_ids(func)
         tile_a_type = _get_var_type(func, "tile_a")
-        tile_b_type = _get_var_type(func, "tile_b")
         assert tile_a_type is not None and tile_a_type.memref is not None
-        assert tile_b_type is not None and tile_b_type.memref is not None
         assert tile_a_type.memref.id_ in alloc_ids
-        assert tile_b_type.memref.id_ in alloc_ids
 
     def test_no_alloc_removed_when_no_reuse(self):
-        """When all lifetimes overlap, no reuse happens and all alloc stmts are preserved."""
+        """When lifetimes truly overlap, no reuse happens and all alloc stmts are preserved.
+
+        Lifetimes: tile_a[3,5], tile_b[4,5], tile_c[5,6]
+        tile_a and tile_b truly overlap ([3,5] vs [4,5]). tile_c touches tile_a
+        at 5 and reuses it → 2 allocs remain (tile_a and tile_b).
+        """
         prog = _build_program_with_allocs(
             tile_specs=[("tile_a", 10), ("tile_b", 11), ("tile_c", 12)],
             op_specs=[
@@ -472,24 +485,25 @@ class TestAllocCleanup:
         after = passes.basic_memory_reuse()(prog)
         func = list(after.functions.values())[0]
 
-        assert _count_alloc_stmts(func) == 3, "All alloc stmts should be preserved when no reuse occurs"
+        assert _count_alloc_stmts(func) == 2, (
+            f"Expected 2 alloc stmts (tile_c reuses tile_a), got {_count_alloc_stmts(func)}"
+        )
 
 
-class TestCastNoReuse:
-    """Tests that tile.cast outputs do NOT reuse other variables' memory.
+class TestDtypeCompatibility:
+    """Tests that tiles with different dtypes do NOT reuse each other's memory.
 
-    PTOAS binds a fixed datatype to each tile buffer during allocation.
-    When tile.cast changes the datatype, the reused buffer rejects data
-    of the new type. Memory reuse is disabled for cast outputs until PTOAS
-    supports multi-dtype reuse on the same buffer.
+    PTO codegen binds a single alloc_tile declaration (including dtype) to each
+    buffer. Reuse across different dtypes would cause the alloc_tile to carry
+    a wrong dtype, leading to incorrect hardware behaviour.
     """
 
     def test_cast_output_does_not_reuse(self):
-        """Cast output should get fresh memory even when a dead tile is available.
+        """Cast changes dtype → no cross-dtype reuse; same-dtype tiles still reuse.
 
         Lifetimes: tile_a[0,1], tile_b[1,2], tile_cast[2,3], tile_c[3,4]
-        Without the restriction, tile_cast would reuse tile_a. With it,
-        tile_cast must allocate fresh memory and tile_c can reuse tile_a.
+        tile_cast (BF16) cannot reuse tile_a/tile_b (FP32) due to dtype mismatch.
+        tile_c (BF16) reuses tile_cast (same dtype, last_use==def).
         """
 
         @pl.program
@@ -510,16 +524,16 @@ class TestCastNoReuse:
         func = _prepare_and_run_memory_reuse(Before)
 
         _assert_all_have_memrefs(func)
-        # tile_cast must NOT reuse tile_a (cast needs fresh buffer)
         _assert_not_shares_memref(func, "tile_a", "tile_cast")
-        # tile_c (non-cast) can still reuse tile_a
-        _assert_shares_memref(func, "tile_a", "tile_c")
+        _assert_not_shares_memref(func, "tile_a", "tile_c")
+        _assert_shares_memref(func, "tile_cast", "tile_c")
 
     def test_cast_among_regular_ops(self):
-        """Cast output is skipped for reuse while regular ops still reuse normally.
+        """Cross-dtype reuse forbidden; same-dtype tiles reuse within their group.
 
         Lifetimes: tile_a[0,1], tile_b[1,2], tile_cast[2,3], tile_d[3,4], tile_e[4,5]
-        tile_cast must not reuse anyone; tile_d reuses tile_a, tile_e reuses tile_b.
+        tile_cast/tile_d/tile_e are BF16 and cannot reuse FP32 tile_a/tile_b.
+        tile_d and tile_e reuse tile_cast (same dtype, producer-consumer chain).
         """
 
         @pl.program
@@ -541,12 +555,112 @@ class TestCastNoReuse:
         func = _prepare_and_run_memory_reuse(Before)
 
         _assert_all_have_memrefs(func)
-        # cast output must not reuse
         _assert_not_shares_memref(func, "tile_a", "tile_cast")
         _assert_not_shares_memref(func, "tile_b", "tile_cast")
-        # regular ops still reuse normally
-        _assert_shares_memref(func, "tile_a", "tile_d")
-        _assert_shares_memref(func, "tile_b", "tile_e")
+        _assert_not_shares_memref(func, "tile_a", "tile_d")
+        _assert_not_shares_memref(func, "tile_b", "tile_e")
+        _assert_shares_memref(func, "tile_cast", "tile_d")
+        _assert_shares_memref(func, "tile_cast", "tile_e")
+
+
+class TestFillpadCompatibility:
+    """Tests that fillpad output does NOT reuse input due to TileView differences.
+
+    fillpad expands valid_shape to full shape and sets a pad value, changing the
+    TileView attributes.  AreTileTypesCompatible detects these differences and
+    prevents unsafe in-place reuse that would confuse PTO codegen.
+    """
+
+    def test_fillpad_output_incompatible_with_input(self):
+        """fillpad changes valid_shape and pad → output cannot reuse input.
+
+        tile_a: shape=[64,64], valid_shape=[48,64], pad=null
+        padded:  shape=[64,64], valid_shape=[64,64], pad=max
+        valid_shape and pad differ → no reuse.
+        """
+
+        @pl.program
+        class Before:
+            @pl.function
+            def main(
+                self,
+                input_a: pl.Tensor[[64, 64], pl.FP32],
+                output: pl.Tensor[[64, 64], pl.FP32],
+            ) -> pl.Tensor[[64, 64], pl.FP32]:
+                tile_a: pl.Tile[[64, 64], pl.FP32] = pl.load(input_a, [0, 0], [64, 64], valid_shapes=[48, 64])
+                padded: pl.Tile[[64, 64], pl.FP32] = pl.fillpad(tile_a, pad_value=pl.TilePad.max)
+                result: pl.Tensor[[64, 64], pl.FP32] = pl.store(padded, [0, 0], output)
+                return result
+
+        func = _prepare_and_run_memory_reuse(Before)
+
+        _assert_all_have_memrefs(func)
+        _assert_not_shares_memref(func, "tile_a", "padded")
+
+    def test_fillpad_different_pad_no_reuse(self):
+        """Two fillpad outputs with different pad values cannot reuse each other.
+
+        padded_max: valid_shape=[64,64], pad=max
+        padded_min: valid_shape=[64,64], pad=min
+        pad differs → no reuse between them, but their inputs can reuse each other.
+        """
+
+        @pl.program
+        class Before:
+            @pl.function
+            def main(
+                self,
+                input_a: pl.Tensor[[64, 64], pl.FP32],
+                output_a: pl.Tensor[[64, 64], pl.FP32],
+                output_b: pl.Tensor[[64, 64], pl.FP32],
+            ) -> pl.Tensor[[64, 64], pl.FP32]:
+                tile_a: pl.Tile[[64, 64], pl.FP32] = pl.load(input_a, [0, 0], [64, 64], valid_shapes=[48, 64])
+                padded_max: pl.Tile[[64, 64], pl.FP32] = pl.fillpad(tile_a, pad_value=pl.TilePad.max)
+                _res_a: pl.Tensor[[64, 64], pl.FP32] = pl.store(padded_max, [0, 0], output_a)
+
+                tile_b: pl.Tile[[64, 64], pl.FP32] = pl.load(input_a, [0, 0], [64, 64], valid_shapes=[48, 64])
+                padded_min: pl.Tile[[64, 64], pl.FP32] = pl.fillpad(tile_b, pad_value=pl.TilePad.min)
+                result: pl.Tensor[[64, 64], pl.FP32] = pl.store(padded_min, [0, 0], output_b)
+                return result
+
+        func = _prepare_and_run_memory_reuse(Before)
+
+        _assert_all_have_memrefs(func)
+        # inputs share (same valid_shape=[48,64], same pad=null)
+        _assert_shares_memref(func, "tile_a", "tile_b")
+        # fillpad outputs do NOT share (pad=max vs pad=min)
+        _assert_not_shares_memref(func, "padded_max", "padded_min")
+
+    def test_fillpad_same_pad_can_reuse(self):
+        """Two fillpad outputs with identical TileView attributes CAN reuse.
+
+        Both padded_a and padded_b: valid_shape=[64,64], pad=max → compatible → reuse.
+        """
+
+        @pl.program
+        class Before:
+            @pl.function
+            def main(
+                self,
+                input_a: pl.Tensor[[64, 64], pl.FP32],
+                output_a: pl.Tensor[[64, 64], pl.FP32],
+                output_b: pl.Tensor[[64, 64], pl.FP32],
+            ) -> pl.Tensor[[64, 64], pl.FP32]:
+                tile_a: pl.Tile[[64, 64], pl.FP32] = pl.load(input_a, [0, 0], [64, 64], valid_shapes=[48, 64])
+                padded_a: pl.Tile[[64, 64], pl.FP32] = pl.fillpad(tile_a, pad_value=pl.TilePad.max)
+                _res_a: pl.Tensor[[64, 64], pl.FP32] = pl.store(padded_a, [0, 0], output_a)
+
+                tile_b: pl.Tile[[64, 64], pl.FP32] = pl.load(input_a, [0, 0], [64, 64], valid_shapes=[48, 64])
+                padded_b: pl.Tile[[64, 64], pl.FP32] = pl.fillpad(tile_b, pad_value=pl.TilePad.max)
+                result: pl.Tensor[[64, 64], pl.FP32] = pl.store(padded_b, [0, 0], output_b)
+                return result
+
+        func = _prepare_and_run_memory_reuse(Before)
+
+        _assert_all_have_memrefs(func)
+        # Same attributes → reuse allowed
+        _assert_shares_memref(func, "tile_a", "tile_b")
+        _assert_shares_memref(func, "padded_a", "padded_b")
 
 
 class TestViewOperationsMemoryReuse:

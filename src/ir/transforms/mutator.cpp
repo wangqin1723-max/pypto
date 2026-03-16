@@ -42,11 +42,19 @@ StmtPtr IRMutator::VisitStmt(const StmtPtr& stmt) {
 
 // Leaf nodes - return original shared_ptr (immutable)
 ExprPtr IRMutator::VisitExpr_(const VarPtr& op) {
-  // Var is immutable, return original
+  auto it = var_remap_.find(op.get());
+  if (it != var_remap_.end()) {
+    return it->second;
+  }
   return op;
 }
 
 ExprPtr IRMutator::VisitExpr_(const IterArgPtr& op) {
+  // Check if this IterArg has been remapped (definition pointer changed during mutation)
+  auto it = var_remap_.find(op.get());
+  if (it != var_remap_.end()) {
+    return it->second;
+  }
   // Visit initValue as Expr
   INTERNAL_CHECK(op->initValue_) << "IterArg has null initValue";
   auto new_init_value = ExprFunctor<ExprPtr>::VisitExpr(op->initValue_);
@@ -366,10 +374,24 @@ StmtPtr IRMutator::VisitStmt_(const ForStmtPtr& op) {
     }
   }
 
+  // Register old→new IterArg mappings so body references are substituted
+  for (size_t i = 0; i < op->iter_args_.size(); ++i) {
+    if (new_iter_args[i].get() != op->iter_args_[i].get()) {
+      var_remap_[op->iter_args_[i].get()] = new_iter_args[i];
+    }
+  }
+
   INTERNAL_CHECK(op->body_) << "ForStmt has null body";
   auto new_body = StmtFunctor<StmtPtr>::VisitStmt(op->body_);
   INTERNAL_CHECK(new_body) << "ForStmt body mutated to null";
   bool body_changed = (new_body.get() != op->body_.get());
+
+  // Clean up IterArg remappings.
+  // Safe to clean before visiting return_vars: return_vars are separate Var objects,
+  // not references to IterArgs, so they don't need the remapping.
+  for (const auto& old_iter_arg : op->iter_args_) {
+    var_remap_.erase(old_iter_arg.get());
+  }
 
   std::vector<VarPtr> new_return_vars;
   bool return_vars_changed = false;
@@ -412,13 +434,8 @@ StmtPtr IRMutator::VisitStmt_(const ForStmtPtr& op) {
 }
 
 StmtPtr IRMutator::VisitStmt_(const WhileStmtPtr& op) {
-  // Visit and potentially mutate the condition expression
-  INTERNAL_CHECK(op->condition_) << "WhileStmt has null condition";
-  auto new_condition = ExprFunctor<ExprPtr>::VisitExpr(op->condition_);
-  INTERNAL_CHECK(new_condition) << "WhileStmt condition mutated to null";
-  bool condition_changed = (new_condition.get() != op->condition_.get());
-
-  // Visit and potentially mutate iter_args
+  // Visit iter_args FIRST (definitions), before condition and body (uses).
+  // This matches the DefField ordering in WhileStmt::GetFieldDescriptors().
   std::vector<IterArgPtr> new_iter_args;
   bool iter_args_changed = false;
   new_iter_args.reserve(op->iter_args_.size());
@@ -435,11 +452,31 @@ StmtPtr IRMutator::VisitStmt_(const WhileStmtPtr& op) {
     }
   }
 
-  // Visit and potentially mutate the body
+  // Register old→new IterArg mappings so condition and body references are substituted
+  for (size_t i = 0; i < op->iter_args_.size(); ++i) {
+    if (new_iter_args[i].get() != op->iter_args_[i].get()) {
+      var_remap_[op->iter_args_[i].get()] = new_iter_args[i];
+    }
+  }
+
+  // Visit condition under remap scope (condition may reference IterArgs)
+  INTERNAL_CHECK(op->condition_) << "WhileStmt has null condition";
+  auto new_condition = ExprFunctor<ExprPtr>::VisitExpr(op->condition_);
+  INTERNAL_CHECK(new_condition) << "WhileStmt condition mutated to null";
+  bool condition_changed = (new_condition.get() != op->condition_.get());
+
+  // Visit body under remap scope
   INTERNAL_CHECK(op->body_) << "WhileStmt has null body";
   auto new_body = StmtFunctor<StmtPtr>::VisitStmt(op->body_);
   INTERNAL_CHECK(new_body) << "WhileStmt body mutated to null";
   bool body_changed = (new_body.get() != op->body_.get());
+
+  // Clean up IterArg remappings.
+  // Safe to clean before visiting return_vars: return_vars are separate Var objects,
+  // not references to IterArgs, so they don't need the remapping.
+  for (const auto& old_iter_arg : op->iter_args_) {
+    var_remap_.erase(old_iter_arg.get());
+  }
 
   // Visit and potentially mutate return_vars
   std::vector<VarPtr> new_return_vars;
@@ -495,7 +532,7 @@ StmtPtr IRMutator::VisitStmt_(const SeqStmtsPtr& op) {
   }
 
   if (changed) {
-    return std::make_shared<const SeqStmts>(std::move(new_stmts), op->span_);
+    return SeqStmts::Flatten(std::move(new_stmts), op->span_);
   } else {
     return op;
   }

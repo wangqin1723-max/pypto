@@ -31,8 +31,8 @@ std::string IRPropertyToString(IRProperty prop) {
       return "NoNestedCalls";
     case IRProperty::NormalizedStmtStructure:
       return "NormalizedStmtStructure";
-    case IRProperty::FlattenedSingleStmt:
-      return "FlattenedSingleStmt";
+    case IRProperty::NoRedundantBlocks:
+      return "NoRedundantBlocks";
     case IRProperty::SplitIncoreOrch:
       return "SplitIncoreOrch";
     case IRProperty::HasMemRefs:
@@ -87,7 +87,8 @@ std::string IRPropertySet::ToString() const {
 
 const IRPropertySet& GetVerifiedProperties() {
   static const IRPropertySet props{IRProperty::SSAForm, IRProperty::TypeChecked,
-                                   IRProperty::AllocatedMemoryAddr, IRProperty::BreakContinueValid};
+                                   IRProperty::AllocatedMemoryAddr, IRProperty::BreakContinueValid,
+                                   IRProperty::NoRedundantBlocks};
   return props;
 }
 
@@ -108,13 +109,14 @@ VerificationLevel GetDefaultVerificationLevel() {
 }
 
 const IRPropertySet& GetStructuralProperties() {
-  static const IRPropertySet props{IRProperty::TypeChecked, IRProperty::BreakContinueValid};
+  static const IRPropertySet props{IRProperty::TypeChecked, IRProperty::BreakContinueValid,
+                                   IRProperty::NoRedundantBlocks};
   return props;
 }
 
 const IRPropertySet& GetDefaultVerifyProperties() {
   static const IRPropertySet props{IRProperty::SSAForm, IRProperty::TypeChecked, IRProperty::NoNestedCalls,
-                                   IRProperty::BreakContinueValid};
+                                   IRProperty::BreakContinueValid, IRProperty::NoRedundantBlocks};
   return props;
 }
 

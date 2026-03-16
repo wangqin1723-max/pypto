@@ -5,6 +5,16 @@ description: Create a GitHub pull request after committing, rebasing, and pushin
 
 # PyPTO GitHub Pull Request Workflow
 
+## Task Tracking
+
+Create tasks to track progress through this workflow:
+
+1. Prepare branch & commit
+2. Check for existing PR
+3. Fetch upstream & rebase
+4. Push to remote
+5. Create PR
+
 ## Workflow Steps
 
 1. **Prepare branch and commit** (if on main or uncommitted changes)

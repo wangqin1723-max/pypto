@@ -176,6 +176,7 @@ def test_get_default_verify_properties():
     assert props.contains(passes.IRProperty.TypeChecked)
     assert props.contains(passes.IRProperty.NoNestedCalls)
     assert props.contains(passes.IRProperty.BreakContinueValid)
+    assert props.contains(passes.IRProperty.NoRedundantBlocks)
 
 
 def test_get_structural_properties():
@@ -183,6 +184,7 @@ def test_get_structural_properties():
     props = passes.get_structural_properties()
     assert props.contains(passes.IRProperty.TypeChecked)
     assert props.contains(passes.IRProperty.BreakContinueValid)
+    assert props.contains(passes.IRProperty.NoRedundantBlocks)
     assert not props.contains(passes.IRProperty.SSAForm)
 
 
@@ -285,6 +287,89 @@ def test_verifier_for_range_scalar_type_invalid():
     for diag in typecheck_diags:
         assert any(keyword in diag.message.lower() for keyword in ["start", "stop", "step"])
         assert "scalar" in diag.message.lower()
+
+
+def _make_nested_seq_stmt_program(nested: bool) -> ir.Program:
+    """Create a program with or without nested SeqStmts.
+
+    Args:
+        nested: If True, wraps assign in an inner SeqStmts to create a violation.
+    """
+    span = ir.Span.unknown()
+    scalar_type = ir.ScalarType(DataType.INT64)
+    a = ir.Var("a", scalar_type, span)
+    x = ir.Var("x", scalar_type, span)
+
+    assign = ir.AssignStmt(x, a, span)
+    return_stmt = ir.ReturnStmt([x], span)
+
+    if nested:
+        inner_seq = ir.SeqStmts([assign], span)
+        body = ir.SeqStmts([inner_seq, return_stmt], span)
+    else:
+        body = ir.SeqStmts([assign, return_stmt], span)
+
+    func = ir.Function("test_func", [a], [scalar_type], body, span)
+    return ir.Program([func], "test_program", span)
+
+
+def test_no_nested_seq_stmt_valid():
+    """Test NoRedundantBlocks verifier passes on valid program (no nested SeqStmts)."""
+    program = _make_nested_seq_stmt_program(nested=False)
+
+    props = passes.IRPropertySet()
+    props.insert(passes.IRProperty.NoRedundantBlocks)
+    diagnostics = passes.PropertyVerifierRegistry.verify(props, program)
+    assert len(diagnostics) == 0
+
+
+def test_no_nested_seq_stmt_invalid():
+    """Test NoRedundantBlocks verifier detects SeqStmts nested inside SeqStmts."""
+    program = _make_nested_seq_stmt_program(nested=True)
+
+    props = passes.IRPropertySet()
+    props.insert(passes.IRProperty.NoRedundantBlocks)
+    diagnostics = passes.PropertyVerifierRegistry.verify(props, program)
+
+    assert len(diagnostics) > 0
+    assert all(d.severity == passes.DiagnosticSeverity.Error for d in diagnostics)
+    assert any(d.rule_name == "NoRedundantBlocks" for d in diagnostics)
+
+
+def test_verification_instrument_checks_structural_before_pass():
+    """Test VerificationInstrument checks structural properties before a pass.
+
+    Constructs IR that violates NoRedundantBlocks and verifies the instrument
+    catches it before the pass even runs.
+    """
+    program = _make_nested_seq_stmt_program(nested=True)
+
+    with pytest.raises(Exception, match="Pre-verification failed"):
+        with passes.PassContext([passes.VerificationInstrument(passes.VerificationMode.BEFORE_AND_AFTER)]):
+            passes.normalize_stmt_structure()(program)
+
+
+def test_verification_instrument_checks_structural_after_pass():
+    """Test VerificationInstrument checks structural properties after a pass.
+
+    Runs a valid program through a pass and verifies no structural violation
+    is raised — proving the after-pass check runs successfully.
+    """
+    ib = builder.IRBuilder()
+
+    with ib.function("test_after") as f:
+        a = f.param("a", ir.ScalarType(DataType.INT64))
+        f.return_type(ir.ScalarType(DataType.INT64))
+        x = ib.let("x", a)
+        ib.return_stmt(x)
+
+    func = f.get_result()
+    program = ir.Program([func], "test_program", ir.Span.unknown())
+
+    # Should not raise — structural properties hold after pass
+    with passes.PassContext([passes.VerificationInstrument(passes.VerificationMode.BEFORE_AND_AFTER)]):
+        result = passes.convert_to_ssa()(program)
+    assert result is not None
 
 
 if __name__ == "__main__":

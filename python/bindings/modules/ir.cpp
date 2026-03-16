@@ -44,6 +44,7 @@
 #include "pypto/ir/transforms/op_conversion_registry.h"
 #include "pypto/ir/transforms/printer.h"
 #include "pypto/ir/transforms/structural_comparison.h"
+#include "pypto/ir/transforms/utils/deep_clone_utils.h"
 #include "pypto/ir/transforms/utils/parent_stmt_analysis.h"
 #include "pypto/ir/type.h"
 
@@ -222,6 +223,8 @@ void BindIR(nb::module_& m) {
   auto shaped_type_class =
       nb::class_<ShapedType, Type>(ir, "ShapedType", "Base class for shaped types (tensors and tiles)");
   BindFields<ShapedType>(shaped_type_class);
+  shaped_type_class.def_prop_ro("memory_space", &ShapedType::GetMemorySpace,
+                                "Canonical memory space for this shaped type");
   shaped_type_class.def(
       "shares_memref_with",
       [](const ShapedTypePtr& self, const ShapedTypePtr& other) {
@@ -301,6 +304,9 @@ void BindIR(nb::module_& m) {
       .value("Acc", MemorySpace::Acc, "Accumulator buffer")
       .value("Bias", MemorySpace::Bias, "Bias buffer")
       .export_values();
+
+  // Short alias: ir.Mem = ir.MemorySpace
+  ir.attr("Mem") = ir.attr("MemorySpace");
 
   // PipeType enum
   nb::enum_<PipeType>(ir, "PipeType", nb::is_arithmetic(), "Pipeline type enumeration")
@@ -386,6 +392,40 @@ void BindIR(nb::module_& m) {
       "get_op", [](const std::string& op_name) { return OpRegistry::GetInstance().GetOp(op_name); },
       nb::arg("op_name"), "Get an operator instance by name");
 
+  ir.def(
+      "get_op_memory_spec",
+      [](const std::string& op_name) -> nb::object {
+        auto& registry = OpRegistry::GetInstance();
+        if (!registry.IsRegistered(op_name)) return nb::none();
+        const auto& spec = registry.GetEntry(op_name).GetMemorySpec();
+        if (!spec.has_value()) return nb::none();
+        // Empty spec (from no_memory_spec()) — no constraints and no resolver
+        if (spec->input_constraints.empty() && !spec->deduce_output_memory) return nb::none();
+
+        nb::dict result;
+        // Input constraints
+        nb::list inputs;
+        for (const auto& c : spec->input_constraints) {
+          nb::list allowed;
+          for (auto ms : c) allowed.append(ms);
+          inputs.append(nb::cast(allowed));
+        }
+        result["input_constraints"] = inputs;
+        // Output (resolve with empty kwargs for display)
+        if (spec->deduce_output_memory) {
+          auto out = spec->deduce_output_memory({});
+          if (out.has_value()) {
+            result["output_memory"] = *out;
+          } else {
+            result["output_memory"] = "inherit_from_input";
+          }
+        } else {
+          result["output_memory"] = nb::none();
+        }
+        return result;
+      },
+      nb::arg("op_name"), "Get memory space specification for a registered operator");
+
   // Var - const shared_ptr
   auto var_class = nb::class_<Var, Expr>(ir, "Var", "Variable reference expression");
 
@@ -408,8 +448,10 @@ void BindIR(nb::module_& m) {
   memref_class
       .def(nb::init<MemorySpace, ExprPtr, uint64_t, uint64_t, Span>(), nb::arg("memory_space"),
            nb::arg("addr"), nb::arg("size"), nb::arg("id"), nb::arg("span") = Span::unknown(),
-           "Create a memory reference with memory_space, addr, size, id, and span")
-      .def_rw("memory_space_", &MemRef::memory_space_, "Memory space (DDR, Vec, Mat, Left, Right, Acc)")
+           "Create a memory reference with legacy memory_space, addr, size, id, and span."
+           " The memory space is kept only in the generated name for compatibility.")
+      .def(nb::init<ExprPtr, uint64_t, uint64_t, Span>(), nb::arg("addr"), nb::arg("size"), nb::arg("id"),
+           nb::arg("span") = Span::unknown(), "Create a memory reference with addr, size, id, and span")
       .def_rw("addr_", &MemRef::addr_, "Starting address expression")
       .def_rw("size_", &MemRef::size_, "Size in bytes (64-bit unsigned)")
       .def_rw("id_", &MemRef::id_, "Unique identifier for this MemRef instance");
@@ -1052,6 +1094,25 @@ void BindIR(nb::module_& m) {
       "has_op_conversion",
       [](const std::string& op_name) { return OpConversionRegistry::GetInstance().HasConversion(op_name); },
       nb::arg("op_name"), "Check if a conversion rule exists for an operator.");
+
+  ir.def(
+      "deep_clone",
+      [](const StmtPtr& body) -> nb::tuple {
+        auto result = DeepClone(body);
+        // Convert raw-pointer-keyed map to shared_ptr-keyed map for Python
+        std::vector<std::pair<VarPtr, VarPtr>> var_map_pairs;
+        for (const auto& [raw_ptr, new_var] : result.var_map) {
+          // Find the original VarPtr from the raw pointer — wrap as non-owning shared_ptr
+          // Since Python holds the original IR tree alive, the raw pointer is valid
+          var_map_pairs.emplace_back(std::shared_ptr<const Var>(std::shared_ptr<const Var>{}, raw_ptr),
+                                     new_var);
+        }
+        return nb::make_tuple(result.cloned_body, var_map_pairs);
+      },
+      nb::arg("body"),
+      "Deep-clone a statement subtree, creating fresh Var objects at definition sites.\n\n"
+      "Returns a tuple of (cloned_body, var_map) where var_map is a list of\n"
+      "(original_var, cloned_var) pairs for definition-site clones.");
 }
 
 }  // namespace python

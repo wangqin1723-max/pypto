@@ -30,6 +30,7 @@
 #include "pypto/ir/transforms/base/visitor.h"
 #include "pypto/ir/transforms/pass_properties.h"
 #include "pypto/ir/transforms/passes.h"
+#include "pypto/ir/transforms/utils/deep_clone_utils.h"
 #include "pypto/ir/transforms/utils/scope_outline_utils.h"
 #include "pypto/ir/type.h"
 #include "pypto/ir/verifier/verifier.h"
@@ -280,9 +281,18 @@ CallPtr CreateTpush(const std::string& op_name, const ExprPtr& tile, const Span&
   return OpRegistry::GetInstance().Create(op_name, {tile}, MakeAivIdxKwargs(), span);
 }
 
+/// Build a clean TileType with only shape, dtype, and memory_space (no TileView/memref).
+/// tpop results should be expressible in the Python DSL without requiring TileView metadata.
+TypePtr CleanTileType(const TypePtr& tile_type) {
+  auto tt = std::dynamic_pointer_cast<const TileType>(tile_type);
+  if (!tt) return tile_type;
+  return std::make_shared<TileType>(tt->shape_, tt->dtype_, std::nullopt, std::nullopt, tt->memory_space_);
+}
+
 CallPtr CreateTpop(const std::string& op_name, const TypePtr& tile_type, const Span& span) {
   auto op = OpRegistry::GetInstance().GetOp(op_name);
-  return std::make_shared<Call>(op, std::vector<ExprPtr>{}, MakeAivIdxKwargs(), tile_type, span);
+  return std::make_shared<Call>(op, std::vector<ExprPtr>{}, MakeAivIdxKwargs(), CleanTileType(tile_type),
+                                span);
 }
 
 // ============================================================================
@@ -308,7 +318,8 @@ std::string GetStmtOpName(const StmtPtr& stmt) {
 
 bool IsSideEffectOp(const StmtPtr& stmt) {
   static const std::unordered_set<std::string> side_effect_ops = {
-      "system.tpush_to_aiv", "system.tpush_to_aic", "tile.store", "tile.assemble"};
+      "system.tpush_to_aiv",  "system.tpush_to_aic", "system.tpop_from_aic",
+      "system.tpop_from_aiv", "tile.store",          "tile.assemble"};
   return side_effect_ops.count(GetStmtOpName(stmt)) > 0;
 }
 
@@ -333,19 +344,45 @@ void CollectAllAssignStmts(const std::vector<StmtPtr>& stmts,
 
 void FindLiveRootsRecursive(const std::vector<StmtPtr>& stmts, std::unordered_set<std::string>& live) {
   for (const auto& stmt : stmts) {
-    if (std::dynamic_pointer_cast<const ReturnStmt>(stmt) || IsSideEffectOp(stmt)) {
+    if (std::dynamic_pointer_cast<const ReturnStmt>(stmt) ||
+        std::dynamic_pointer_cast<const YieldStmt>(stmt) || IsSideEffectOp(stmt)) {
       outline_utils::VarRefCollector refs;
       refs.VisitStmt(stmt);
       live.insert(refs.var_refs.begin(), refs.var_refs.end());
+      // Mark LHS of side-effect assignments as live for downstream propagation
+      if (auto assign = std::dynamic_pointer_cast<const AssignStmt>(stmt)) {
+        live.insert(assign->var_->name_);
+      }
     }
+    // Collect variable refs from control expressions and iter_args init values
+    auto collect_iter_arg_refs = [&](const auto& loop_stmt) {
+      for (const auto& iter_arg : loop_stmt->iter_args_) {
+        outline_utils::VarRefCollector refs;
+        refs.VisitExpr(iter_arg->initValue_);
+        live.insert(refs.var_refs.begin(), refs.var_refs.end());
+      }
+    };
+    auto collect_expr_refs = [&](const ExprPtr& expr) {
+      outline_utils::VarRefCollector refs;
+      refs.VisitExpr(expr);
+      live.insert(refs.var_refs.begin(), refs.var_refs.end());
+    };
+
     if (auto for_stmt = std::dynamic_pointer_cast<const ForStmt>(stmt)) {
+      collect_expr_refs(for_stmt->start_);
+      collect_expr_refs(for_stmt->stop_);
+      collect_expr_refs(for_stmt->step_);
+      collect_iter_arg_refs(for_stmt);
       FindLiveRootsRecursive(FlattenBody(for_stmt->body_), live);
     } else if (auto if_stmt = std::dynamic_pointer_cast<const IfStmt>(stmt)) {
+      collect_expr_refs(if_stmt->condition_);
       FindLiveRootsRecursive(FlattenBody(if_stmt->then_body_), live);
       if (if_stmt->else_body_.has_value()) {
         FindLiveRootsRecursive(FlattenBody(if_stmt->else_body_.value()), live);
       }
     } else if (auto while_stmt = std::dynamic_pointer_cast<const WhileStmt>(stmt)) {
+      collect_expr_refs(while_stmt->condition_);
+      collect_iter_arg_refs(while_stmt);
       FindLiveRootsRecursive(FlattenBody(while_stmt->body_), live);
     }
   }
@@ -356,7 +393,7 @@ std::vector<StmtPtr> FilterDeadCode(const std::vector<StmtPtr>& stmts,
   std::vector<StmtPtr> result;
   for (const auto& stmt : stmts) {
     if (auto assign = std::dynamic_pointer_cast<const AssignStmt>(stmt)) {
-      if (live.count(assign->var_->name_)) {
+      if (live.count(assign->var_->name_) || IsSideEffectOp(stmt)) {
         result.push_back(stmt);
       }
     } else if (auto for_stmt = std::dynamic_pointer_cast<const ForStmt>(stmt)) {
@@ -426,9 +463,12 @@ enum class CoreSide { AIC, AIV };
 
 /// Build the body for one core side (AIC or AIV), filtering statements by affinity
 /// and replacing CV boundary moves with TPUSH/TPOP ops.
+/// tpop_var_remap collects original dest_var pointer -> clean-typed new_var mappings
+/// for tpop dest vars, so downstream references can be updated via pointer-based substitution.
 std::vector<StmtPtr> BuildCoreBody(CoreSide side, const std::vector<StmtPtr>& stmts,
                                    const std::unordered_map<const Stmt*, CoreAffinity>& stmt_map,
-                                   const std::unordered_map<const Stmt*, CVBoundaryMove>& boundary_moves) {
+                                   const std::unordered_map<const Stmt*, CVBoundaryMove>& boundary_moves,
+                                   std::unordered_map<const Var*, VarPtr>& tpop_var_remap) {
   // AIC keeps CUBE, skips VECTOR; AIV keeps VECTOR, skips CUBE
   CoreAffinity keep_affinity = (side == CoreSide::AIC) ? CoreAffinity::CUBE : CoreAffinity::VECTOR;
   CoreAffinity skip_affinity = (side == CoreSide::AIC) ? CoreAffinity::VECTOR : CoreAffinity::CUBE;
@@ -457,8 +497,13 @@ std::vector<StmtPtr> BuildCoreBody(CoreSide side, const std::vector<StmtPtr>& st
           result.push_back(
               std::make_shared<EvalStmt>(CreateTpush(push_op, bm.source_tile, stmt->span_), stmt->span_));
         } else {
+          // Use the dest_var's type (which has memory_space from infer_tile_memory_space)
+          // as the source, then strip TileView so the type is DSL-expressible.
+          auto clean_type = CleanTileType(bm.dest_var->GetType());
+          auto clean_var = std::make_shared<Var>(bm.dest_var->name_, clean_type, stmt->span_);
+          tpop_var_remap[bm.dest_var.get()] = clean_var;
           result.push_back(std::make_shared<AssignStmt>(
-              bm.dest_var, CreateTpop(pop_op, bm.result_type, stmt->span_), stmt->span_));
+              clean_var, CreateTpop(pop_op, clean_type, stmt->span_), stmt->span_));
         }
         continue;
       }
@@ -473,23 +518,26 @@ std::vector<StmtPtr> BuildCoreBody(CoreSide side, const std::vector<StmtPtr>& st
     } else if (affinity == CoreAffinity::MIXED) {
       // Recurse into compound statements, building pruned copies
       if (auto for_stmt = std::dynamic_pointer_cast<const ForStmt>(stmt)) {
-        auto new_body = BuildCoreBody(side, FlattenBody(for_stmt->body_), stmt_map, boundary_moves);
+        auto new_body =
+            BuildCoreBody(side, FlattenBody(for_stmt->body_), stmt_map, boundary_moves, tpop_var_remap);
         result.push_back(std::make_shared<ForStmt>(
             for_stmt->loop_var_, for_stmt->start_, for_stmt->stop_, for_stmt->step_, for_stmt->iter_args_,
             MakeBody(new_body, for_stmt->span_), for_stmt->return_vars_, for_stmt->span_, for_stmt->kind_,
             for_stmt->chunk_size_, for_stmt->chunk_policy_, for_stmt->loop_origin_));
       } else if (auto if_stmt = std::dynamic_pointer_cast<const IfStmt>(stmt)) {
-        auto new_then = BuildCoreBody(side, FlattenBody(if_stmt->then_body_), stmt_map, boundary_moves);
+        auto new_then =
+            BuildCoreBody(side, FlattenBody(if_stmt->then_body_), stmt_map, boundary_moves, tpop_var_remap);
         std::optional<StmtPtr> new_else;
         if (if_stmt->else_body_.has_value()) {
-          auto new_else_stmts =
-              BuildCoreBody(side, FlattenBody(if_stmt->else_body_.value()), stmt_map, boundary_moves);
+          auto new_else_stmts = BuildCoreBody(side, FlattenBody(if_stmt->else_body_.value()), stmt_map,
+                                              boundary_moves, tpop_var_remap);
           new_else = MakeBody(new_else_stmts, if_stmt->span_);
         }
         result.push_back(std::make_shared<IfStmt>(if_stmt->condition_, MakeBody(new_then, if_stmt->span_),
                                                   new_else, if_stmt->return_vars_, if_stmt->span_));
       } else if (auto while_stmt = std::dynamic_pointer_cast<const WhileStmt>(stmt)) {
-        auto new_body = BuildCoreBody(side, FlattenBody(while_stmt->body_), stmt_map, boundary_moves);
+        auto new_body =
+            BuildCoreBody(side, FlattenBody(while_stmt->body_), stmt_map, boundary_moves, tpop_var_remap);
         result.push_back(std::make_shared<WhileStmt>(while_stmt->condition_, while_stmt->iter_args_,
                                                      MakeBody(new_body, while_stmt->span_),
                                                      while_stmt->return_vars_, while_stmt->span_));
@@ -525,7 +573,8 @@ ExpandedKernel ExpandMixedFunction(const FunctionPtr& func, bool create_group = 
   CollectCVBoundaryMoves(stmts, boundary_moves);
 
   // Build AIC body (recursive — handles MIXED compound stmts)
-  auto aic_stmts = BuildCoreBody(CoreSide::AIC, stmts, stmt_map, boundary_moves);
+  std::unordered_map<const Var*, VarPtr> aic_tpop_remap;
+  auto aic_stmts = BuildCoreBody(CoreSide::AIC, stmts, stmt_map, boundary_moves, aic_tpop_remap);
 
   // Remove ReturnStmt from AIC (AIC doesn't return values)
   std::vector<StmtPtr> aic_stmts_no_return;
@@ -534,26 +583,60 @@ ExpandedKernel ExpandMixedFunction(const FunctionPtr& func, bool create_group = 
       aic_stmts_no_return.push_back(s);
     }
   }
-
   // DCE on AIC (recursive)
   auto aic_final = EliminateDeadCode(aic_stmts_no_return);
 
   // Build AIV body (recursive — handles MIXED compound stmts)
-  auto aiv_stmts = BuildCoreBody(CoreSide::AIV, stmts, stmt_map, boundary_moves);
+  std::unordered_map<const Var*, VarPtr> aiv_tpop_remap;
+  auto aiv_stmts = BuildCoreBody(CoreSide::AIV, stmts, stmt_map, boundary_moves, aiv_tpop_remap);
   // DCE on AIV (recursive)
   auto aiv_final = EliminateDeadCode(aiv_stmts);
 
-  // Create AIC function (same params, no return)
-  std::string aic_name = func->name_ + "_aic";
-  auto aic_func =
-      std::make_shared<Function>(aic_name, func->params_, func->param_directions_, std::vector<TypePtr>{},
-                                 MakeBody(aic_final, func->span_), func->span_, FunctionType::AIC);
+  // Helper to create fresh params and build a DeepClone var_map
+  auto make_param_map = [&]() {
+    std::unordered_map<const Var*, ExprPtr> param_map;
+    std::vector<VarPtr> fresh_params;
+    for (const auto& var : func->params_) {
+      auto fresh = std::make_shared<Var>(var->name_, var->GetType(), func->span_);
+      fresh_params.push_back(fresh);
+      param_map[var.get()] = fresh;
+    }
+    return std::make_pair(fresh_params, param_map);
+  };
 
-  // Create AIV function (same params, same return)
+  // Helper to pre-seed tpop var remappings into a DeepClone map.
+  // Maps both the original dest_var and the clean_var itself to prevent
+  // DeepClone from creating yet another fresh copy at the AssignStmt DefField.
+  auto seed_tpop_remap = [](std::unordered_map<const Var*, ExprPtr>& clone_map,
+                            const std::unordered_map<const Var*, VarPtr>& tpop_remap) {
+    for (const auto& [orig_ptr, tpop_var] : tpop_remap) {
+      clone_map[orig_ptr] = tpop_var;
+      // Also seed the tpop_var itself to prevent DeepClone from re-cloning it
+      // when it encounters it as an AssignStmt LHS (DefField).
+      clone_map[tpop_var.get()] = tpop_var;
+    }
+  };
+
+  // Create AIC function with deep clone (fresh Vars for all params and locals)
+  std::string aic_name = func->name_ + "_aic";
+  auto [aic_params, aic_map] = make_param_map();
+  seed_tpop_remap(aic_map, aic_tpop_remap);
+  auto [aic_cloned_body, aic_clone_map_unused] = DeepClone(MakeBody(aic_final, func->span_), aic_map);
+  (void)aic_clone_map_unused;
+  auto aic_func =
+      std::make_shared<Function>(aic_name, aic_params, func->param_directions_, std::vector<TypePtr>{},
+                                 aic_cloned_body, func->span_, FunctionType::AIC);
+
+  // Create AIV function with deep clone (fresh Vars for all params and locals,
+  // ensuring no shared Var pointers with AIC for structural equality)
   std::string aiv_name = func->name_ + "_aiv";
+  auto [aiv_params, aiv_map] = make_param_map();
+  seed_tpop_remap(aiv_map, aiv_tpop_remap);
+  auto [aiv_cloned_body, aiv_clone_map_unused] = DeepClone(MakeBody(aiv_final, func->span_), aiv_map);
+  (void)aiv_clone_map_unused;
   auto aiv_func =
-      std::make_shared<Function>(aiv_name, func->params_, func->param_directions_, func->return_types_,
-                                 MakeBody(aiv_final, func->span_), func->span_, FunctionType::AIV);
+      std::make_shared<Function>(aiv_name, aiv_params, func->param_directions_, func->return_types_,
+                                 aiv_cloned_body, func->span_, FunctionType::AIV);
 
   if (!create_group) {
     return {aic_func, aiv_func, std::nullopt};
@@ -563,10 +646,8 @@ ExpandedKernel ExpandMixedFunction(const FunctionPtr& func, bool create_group = 
   std::string group_name = func->name_;  // Group replaces the original
 
   // Create fresh parameters for the group function
-  std::vector<VarPtr> group_params;
-  for (const auto& var : func->params_) {
-    group_params.push_back(std::make_shared<Var>(var->name_, var->GetType(), func->span_));
-  }
+  auto [group_params, group_map_unused] = make_param_map();
+  (void)group_map_unused;
 
   // Build call args from group params
   std::vector<ExprPtr> call_args(group_params.begin(), group_params.end());
@@ -622,39 +703,34 @@ FunctionPtr RewriteGroupCaller(const FunctionPtr& group_func, const std::string&
   std::vector<StmtPtr> new_stmts;
 
   for (const auto& stmt : stmts) {
-    // Case 1: AssignStmt(var, Call(GlobalVar(incore_name), args))
-    if (auto assign = std::dynamic_pointer_cast<const AssignStmt>(stmt)) {
-      auto call = std::dynamic_pointer_cast<const Call>(assign->value_);
-      if (call) {
-        auto gv = std::dynamic_pointer_cast<const GlobalVar>(call->op_);
-        if (gv && gv->name_ == incore_name) {
-          auto aic_call =
-              std::make_shared<Call>(std::make_shared<GlobalVar>(aic_name), call->args_, stmt->span_);
-          new_stmts.push_back(std::make_shared<EvalStmt>(aic_call, stmt->span_));
+    // Extract the Call targeting incore_name (from AssignStmt or EvalStmt)
+    CallPtr call;
+    auto assign = std::dynamic_pointer_cast<const AssignStmt>(stmt);
+    if (assign) {
+      call = std::dynamic_pointer_cast<const Call>(assign->value_);
+    } else if (auto eval = std::dynamic_pointer_cast<const EvalStmt>(stmt)) {
+      call = std::dynamic_pointer_cast<const Call>(eval->expr_);
+    }
 
+    if (call) {
+      auto gv = std::dynamic_pointer_cast<const GlobalVar>(call->op_);
+      if (gv && gv->name_ == incore_name) {
+        // Emit AIC call (always fire-and-forget)
+        auto aic_call =
+            std::make_shared<Call>(std::make_shared<GlobalVar>(aic_name), call->args_, stmt->span_);
+        new_stmts.push_back(std::make_shared<EvalStmt>(aic_call, stmt->span_));
+
+        // Emit AIV call: AssignStmt preserves return value, EvalStmt for void
+        if (assign) {
           auto aiv_call = std::make_shared<Call>(std::make_shared<GlobalVar>(aiv_name), call->args_,
                                                  call->GetType(), stmt->span_);
           new_stmts.push_back(std::make_shared<AssignStmt>(assign->var_, aiv_call, stmt->span_));
-          continue;
-        }
-      }
-    }
-
-    // Case 2: EvalStmt(Call(GlobalVar(incore_name), args)) — no return
-    if (auto eval = std::dynamic_pointer_cast<const EvalStmt>(stmt)) {
-      auto call = std::dynamic_pointer_cast<const Call>(eval->expr_);
-      if (call) {
-        auto gv = std::dynamic_pointer_cast<const GlobalVar>(call->op_);
-        if (gv && gv->name_ == incore_name) {
-          auto aic_call =
-              std::make_shared<Call>(std::make_shared<GlobalVar>(aic_name), call->args_, stmt->span_);
-          new_stmts.push_back(std::make_shared<EvalStmt>(aic_call, stmt->span_));
-
+        } else {
           auto aiv_call =
               std::make_shared<Call>(std::make_shared<GlobalVar>(aiv_name), call->args_, stmt->span_);
           new_stmts.push_back(std::make_shared<EvalStmt>(aiv_call, stmt->span_));
-          continue;
         }
+        continue;
       }
     }
 

@@ -574,9 +574,7 @@ class TestConvertTensorToTileOps:
                 rhs_mat: pl.Tile[[128, 64], pl.FP16] = pl.load(
                     rhs, [0, 0], [128, 64], [128, 64], target_memory=pl.MemorySpace.Mat, transpose=False
                 )
-                lhs_l0a: pl.Tile[[16, 128], pl.FP16] = pl.move(lhs_mat, target_memory=pl.MemorySpace.Left)
-                rhs_l0b: pl.Tile[[128, 64], pl.FP16] = pl.move(rhs_mat, target_memory=pl.MemorySpace.Right)
-                y_tile: pl.Tile[[16, 64], pl.FP32] = pl.matmul(lhs_l0a, rhs_l0b)
+                y_tile: pl.Tile[[16, 64], pl.FP32] = pl.matmul(lhs_mat, rhs_mat)
                 out_0: pl.Tensor[[16, 64], pl.FP16] = pl.store(y_tile, [0, 0], out_0)
                 return out_0
 
@@ -635,9 +633,7 @@ class TestConvertTensorToTileOps:
                 rhs_mat: pl.Tile[[128, 128], pl.BF16] = pl.load(
                     rhs, [0, 0], [128, 128], [128, 128], target_memory=pl.MemorySpace.Mat, transpose=True
                 )
-                lhs_l0a: pl.Tile[[16, 128], pl.BF16] = pl.move(lhs_mat, target_memory=pl.MemorySpace.Left)
-                rhs_l0b: pl.Tile[[128, 128], pl.BF16] = pl.move(rhs_mat, target_memory=pl.MemorySpace.Right)
-                y_tile: pl.Tile[[16, 128], pl.FP32] = pl.matmul(lhs_l0a, rhs_l0b)
+                y_tile: pl.Tile[[16, 128], pl.FP32] = pl.matmul(lhs_mat, rhs_mat)
                 out_0: pl.Tensor[[16, 128], pl.BF16] = pl.store(y_tile, [0, 0], out_0)
                 return out_0
 
@@ -1288,8 +1284,8 @@ class TestGmLocalTensorConversion:
         After = passes.convert_tensor_to_tile_ops()(Before)
         ir.assert_structural_equal(After, Expected)
 
-    def test_consecutive_slice_raises_error(self):
-        """Consecutive tensor.slice on a slice result should raise an error."""
+    def test_consecutive_slice_converts_to_tile_slice(self):
+        """Consecutive tensor.slice: first becomes tile.load, second becomes tile.slice."""
 
         @pl.program
         class Before:
@@ -1304,8 +1300,107 @@ class TestGmLocalTensorConversion:
                 y: pl.Tensor[[4, 8], pl.FP32] = self.main_incore_0(x)
                 return y
 
-        with pytest.raises(Exception, match="Consecutive tensor.slice"):
-            passes.convert_tensor_to_tile_ops()(Before)
+        @pl.program
+        class Expected:
+            @pl.function(type=pl.FunctionType.InCore)
+            def main_incore_0(
+                self,
+                x: pl.Tensor[[32, 64], pl.FP32],
+                out_0: pl.Out[pl.Tensor[[4, 8], pl.FP32]],
+            ) -> pl.Tensor[[4, 8], pl.FP32]:
+                s1_tile: pl.Tile[[16, 32], pl.FP32] = pl.load(x, [0, 0], [16, 32])
+                s2_tile: pl.Tile[[4, 8], pl.FP32] = pl.tile.slice(s1_tile, [4, 8], [0, 0])
+                out_0: pl.Tensor[[4, 8], pl.FP32] = pl.store(s2_tile, [0, 0], out_0)
+                return out_0
+
+            @pl.function
+            def main(self, x: pl.Tensor[[32, 64], pl.FP32]) -> pl.Tensor[[4, 8], pl.FP32]:
+                out_0: pl.Tensor[[4, 8], pl.FP32] = pl.create_tensor([4, 8], dtype=pl.FP32)
+                y: pl.Tensor[[4, 8], pl.FP32] = self.main_incore_0(x, out_0)
+                return y
+
+        After = passes.convert_tensor_to_tile_ops()(Before)
+        ir.assert_structural_equal(After, Expected)
+
+    def test_triple_consecutive_slice(self):
+        """Three consecutive tensor.slice: first becomes tile.load, rest become tile.slice."""
+
+        @pl.program
+        class Before:
+            @pl.function(type=pl.FunctionType.InCore)
+            def main_incore_0(self, x: pl.Tensor[[64, 128], pl.FP32]) -> pl.Tensor[[2, 4], pl.FP32]:
+                s1: pl.Tensor[[32, 64], pl.FP32] = pl.tensor.slice(x, [32, 64], [0, 0])
+                s2: pl.Tensor[[8, 16], pl.FP32] = pl.tensor.slice(s1, [8, 16], [0, 0])
+                s3: pl.Tensor[[2, 4], pl.FP32] = pl.tensor.slice(s2, [2, 4], [0, 0])
+                return s3
+
+            @pl.function
+            def main(self, x: pl.Tensor[[64, 128], pl.FP32]) -> pl.Tensor[[2, 4], pl.FP32]:
+                y: pl.Tensor[[2, 4], pl.FP32] = self.main_incore_0(x)
+                return y
+
+        @pl.program
+        class Expected:
+            @pl.function(type=pl.FunctionType.InCore)
+            def main_incore_0(
+                self,
+                x: pl.Tensor[[64, 128], pl.FP32],
+                out_0: pl.Out[pl.Tensor[[2, 4], pl.FP32]],
+            ) -> pl.Tensor[[2, 4], pl.FP32]:
+                s1_tile: pl.Tile[[32, 64], pl.FP32] = pl.load(x, [0, 0], [32, 64])
+                s2_tile: pl.Tile[[8, 16], pl.FP32] = pl.tile.slice(s1_tile, [8, 16], [0, 0])
+                s3_tile: pl.Tile[[2, 4], pl.FP32] = pl.tile.slice(s2_tile, [2, 4], [0, 0])
+                out_0: pl.Tensor[[2, 4], pl.FP32] = pl.store(s3_tile, [0, 0], out_0)
+                return out_0
+
+            @pl.function
+            def main(self, x: pl.Tensor[[64, 128], pl.FP32]) -> pl.Tensor[[2, 4], pl.FP32]:
+                out_0: pl.Tensor[[2, 4], pl.FP32] = pl.create_tensor([2, 4], dtype=pl.FP32)
+                y: pl.Tensor[[2, 4], pl.FP32] = self.main_incore_0(x, out_0)
+                return y
+
+        After = passes.convert_tensor_to_tile_ops()(Before)
+        ir.assert_structural_equal(After, Expected)
+
+    def test_consecutive_slice_with_computation(self):
+        """Consecutive slice result used in computation (tile.add)."""
+
+        @pl.program
+        class Before:
+            @pl.function(type=pl.FunctionType.InCore)
+            def main_incore_0(self, x: pl.Tensor[[32, 64], pl.FP32]) -> pl.Tensor[[4, 8], pl.FP32]:
+                s1: pl.Tensor[[16, 32], pl.FP32] = pl.tensor.slice(x, [16, 32], [0, 0])
+                s2: pl.Tensor[[4, 8], pl.FP32] = pl.tensor.slice(s1, [4, 8], [0, 0])
+                y: pl.Tensor[[4, 8], pl.FP32] = pl.add(s2, s2)
+                return y
+
+            @pl.function
+            def main(self, x: pl.Tensor[[32, 64], pl.FP32]) -> pl.Tensor[[4, 8], pl.FP32]:
+                y: pl.Tensor[[4, 8], pl.FP32] = self.main_incore_0(x)
+                return y
+
+        @pl.program
+        class Expected:
+            @pl.function(type=pl.FunctionType.InCore)
+            def main_incore_0(
+                self,
+                x: pl.Tensor[[32, 64], pl.FP32],
+                out_0: pl.Out[pl.Tensor[[4, 8], pl.FP32]],
+            ) -> pl.Tensor[[4, 8], pl.FP32]:
+                s1_tile: pl.Tile[[16, 32], pl.FP32] = pl.load(x, [0, 0], [16, 32])
+                s2_tile: pl.Tile[[4, 8], pl.FP32] = pl.tile.slice(s1_tile, [4, 8], [0, 0])
+                y_tile: pl.Tile[[4, 8], pl.FP32] = pl.tile.add(s2_tile, s2_tile)
+                out_0: pl.Tensor[[4, 8], pl.FP32] = pl.store(y_tile, [0, 0], out_0)
+                return out_0
+
+            @pl.function
+            def main(self, x: pl.Tensor[[32, 64], pl.FP32]) -> pl.Tensor[[4, 8], pl.FP32]:
+                out_0: pl.Tensor[[4, 8], pl.FP32] = pl.create_tensor([4, 8], dtype=pl.FP32)
+                y: pl.Tensor[[4, 8], pl.FP32] = self.main_incore_0(x, out_0)
+                return y
+
+        After = passes.convert_tensor_to_tile_ops()(Before)
+        ir.assert_structural_equal(After, Expected)
 
     def test_gm_tensor_read_stays_tensor_read(self):
         """gm_tensor.read (function param) stays as tensor.read, no Phase 1 load."""
@@ -1521,11 +1616,7 @@ class TestSliceMatmulConversion:
                 lhs_mat: pl.Tile[[16, 128], pl.BF16] = pl.load(
                     a, [0, 0], [16, 128], [16, 128], target_memory=pl.MemorySpace.Mat, transpose=False
                 )
-                lhs_l0a: pl.Tile[[16, 128], pl.BF16] = pl.move(lhs_mat, target_memory=pl.MemorySpace.Left)
-                rhs_l0b: pl.Tile[[128, 64], pl.BF16] = pl.move(
-                    b_slice_tile, target_memory=pl.MemorySpace.Right
-                )
-                result_tile: pl.Tile[[16, 64], pl.FP32] = pl.matmul(lhs_l0a, rhs_l0b)
+                result_tile: pl.Tile[[16, 64], pl.FP32] = pl.matmul(lhs_mat, b_slice_tile)
                 out_0: pl.Tensor[[16, 64], pl.BF16] = pl.store(result_tile, [0, 0], out_0)
                 return out_0
 
@@ -1591,11 +1682,7 @@ class TestSliceMatmulConversion:
                     target_memory=pl.MemorySpace.Mat,
                     transpose=False,
                 )
-                lhs_l0a: pl.Tile[[1, 128], pl.BF16] = pl.move(lhs_mat, target_memory=pl.MemorySpace.Left)
-                rhs_l0b: pl.Tile[[128, 120], pl.BF16] = pl.move(
-                    k_slice_tile, target_memory=pl.MemorySpace.Right
-                )
-                result_tile: pl.Tile[[1, 120], pl.FP32] = pl.matmul(lhs_l0a, rhs_l0b)
+                result_tile: pl.Tile[[1, 120], pl.FP32] = pl.matmul(lhs_mat, k_slice_tile)
                 out_0: pl.Tensor[[1, 120], pl.BF16] = pl.store(result_tile, [0, 0], out_0)
                 return out_0
 
@@ -1661,11 +1748,7 @@ class TestSliceMatmulConversion:
                     target_memory=pl.MemorySpace.Mat,
                     transpose=False,
                 )
-                lhs_l0a: pl.Tile[[16, 128], pl.BF16] = pl.move(
-                    a_slice_tile, target_memory=pl.MemorySpace.Left
-                )
-                rhs_l0b: pl.Tile[[128, 64], pl.BF16] = pl.move(rhs_mat, target_memory=pl.MemorySpace.Right)
-                result_tile: pl.Tile[[16, 64], pl.FP32] = pl.matmul(lhs_l0a, rhs_l0b)
+                result_tile: pl.Tile[[16, 64], pl.FP32] = pl.matmul(a_slice_tile, rhs_mat)
                 out_0: pl.Tensor[[16, 64], pl.BF16] = pl.store(result_tile, [0, 0], out_0)
                 return out_0
 

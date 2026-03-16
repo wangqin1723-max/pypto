@@ -15,7 +15,7 @@ Extensible verification system for validating PyPTO IR correctness through plugg
 
 - **Pluggable Rule System**: Extend with custom verification rules
 - **Property-Based Verification**: Opt-in property sets — verify exactly what you need
-- **Structural Properties**: TypeChecked and BreakContinueValid are verified once at pipeline start, not per-pass
+- **Structural Properties**: TypeChecked, BreakContinueValid, and NoRedundantBlocks are verified at pipeline start by `PassPipeline` and before/after each pass by `VerificationInstrument`
 - **Dual Verification Modes**: Collect diagnostics or throw on first error
 - **Pass Integration**: Use as a Pass in optimization pipelines
 - **Comprehensive Diagnostics**: Collect all issues with source locations
@@ -26,10 +26,10 @@ Extensible verification system for validating PyPTO IR correctness through plugg
 
 | Category | Examples | Behavior |
 | -------- | -------- | -------- |
-| **Structural** | TypeChecked, BreakContinueValid | Always true. Verified at pipeline start. Never in PassProperties. |
+| **Structural** | TypeChecked, BreakContinueValid, NoRedundantBlocks | Always true. Verified at pipeline start and before/after each pass by `VerificationInstrument`. Never in PassProperties. |
 | **Pipeline** | SSAForm, NoNestedCalls, HasMemRefs, ... | Produced/invalidated by passes. Verified per pass-declared contracts. |
 
-`GetStructuralProperties()` returns `{TypeChecked, BreakContinueValid}`. These are verified **once at pipeline start** by `PassPipeline::Run()`. Since no pass declares them in `required`/`produced`/`invalidated`, they stay verified throughout.
+`GetStructuralProperties()` returns `{TypeChecked, BreakContinueValid, NoRedundantBlocks}`. These are verified **at pipeline start** by `PassPipeline::Run()` and **before/after each pass** by `VerificationInstrument`. Since no pass declares them in `required`/`produced`/`invalidated`, `VerificationInstrument` unions them with the pass's declared properties to ensure no pass breaks these fundamental invariants.
 
 ### Verification Rule System
 
@@ -53,7 +53,7 @@ The verifier uses a **plugin architecture** where each `PropertyVerifier` subcla
 ### Integration with Pass System
 
 1. **Automatic property verification**: `PassPipeline` uses `PropertyVerifierRegistry` to check produced properties after each pass (controlled by `VerificationLevel` in `PassContext`). Structural properties are checked at pipeline start. See [Pass Manager](00-pass_manager.md).
-2. **`VerificationInstrument`**: A `PassInstrument` that verifies required/produced properties before/after passes via `PassContext`.
+2. **`VerificationInstrument`**: A `PassInstrument` that verifies properties via `PassContext`. Before each pass, it checks the pass's declared `required` properties. After each pass, it checks the pass's declared `produced` properties **plus all structural properties** — ensuring no pass breaks fundamental IR invariants.
 
 The `run_verifier()` utility creates a standalone `Pass` for ad-hoc use in custom pipelines, but it is **not** part of the default optimization strategies.
 
@@ -65,8 +65,8 @@ The `run_verifier()` utility creates a standalone `Pass` for ad-hoc use in custo
 | **TypeCheck** | TypeChecked | Type kind/dtype/shape/size consistency |
 | **NoNestedCall** | NoNestedCalls | No nested call expressions in args, conditions, ranges |
 | **BreakContinueCheck** | BreakContinueValid | Break/continue only in sequential/while loops |
-| **NormalizedStmtStructure** | NormalizedStmtStructure | Bodies are SeqStmts, consecutive assigns wrapped in OpStmts |
-| **FlattenedSingleStmt** | FlattenedSingleStmt | No single-element SeqStmts/OpStmts |
+| **NormalizedStmtStructure** | NormalizedStmtStructure | Consecutive assigns wrapped in OpStmts |
+| **NoRedundantBlocks** | NoRedundantBlocks | No single-child or nested SeqStmts/OpStmts |
 | **SplitIncoreOrch** | SplitIncoreOrch | No InCore ScopeStmts remain in Opaque functions |
 | **IncoreTileOps** | IncoreTileOps | InCore functions use tile ops (no tensor-level ops remain) |
 | **HasMemRefs** | HasMemRefs | All TileType variables have MemRef initialized |
@@ -135,9 +135,9 @@ Singleton registry mapping `IRProperty` values to `PropertyVerifier` factories. 
 
 | Function | Returns | Description |
 | -------- | ------- | ----------- |
-| `GetStructuralProperties()` | `{TypeChecked, BreakContinueValid}` | Invariants verified at pipeline start |
-| `GetDefaultVerifyProperties()` | `{SSAForm, TypeChecked, NoNestedCalls, BreakContinueValid}` | Default set for `run_verifier()` |
-| `GetVerifiedProperties()` | `{SSAForm, TypeChecked, AllocatedMemoryAddr, BreakContinueValid}` | Lightweight set for `PassPipeline` auto-verify |
+| `GetStructuralProperties()` | `{TypeChecked, BreakContinueValid, NoRedundantBlocks}` | Invariants verified at pipeline start and before/after each pass |
+| `GetDefaultVerifyProperties()` | `{SSAForm, TypeChecked, NoNestedCalls, BreakContinueValid, NoRedundantBlocks}` | Default set for `run_verifier()` |
+| `GetVerifiedProperties()` | `{SSAForm, TypeChecked, AllocatedMemoryAddr, BreakContinueValid, NoRedundantBlocks}` | Lightweight set for `PassPipeline` auto-verify |
 
 ### RunVerifier Pass Factory
 

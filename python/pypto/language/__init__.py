@@ -38,7 +38,17 @@ Typical usage:
 """
 
 from pypto.pypto_core import DataType
-from pypto.pypto_core.ir import ForKind, FunctionType, MemorySpace, MemRef, PipeType, TensorLayout, TilePad
+from pypto.pypto_core.ir import (
+    ForKind,
+    FunctionType,
+    MemorySpace,
+    MemRef,
+    PipeType,
+    TensorLayout,
+    TileLayout,
+    TilePad,
+    TileView,
+)
 
 from . import parser
 from .dsl_api import (
@@ -153,6 +163,9 @@ from .op.unified_ops import (
 from .parser.decorator import InlineFunction, function, inline, program
 from .parser.text_parser import loads, loads_program, parse, parse_program
 from .typing import DynVar, InOut, IntLike, Out, Scalar, Tensor, Tile, dynamic
+
+# Short alias for MemorySpace (pl.Mem.Vec instead of pl.MemorySpace.Vec)
+Mem = MemorySpace
 
 # Re-export TensorLayout constants for convenience
 ND = TensorLayout.ND
@@ -309,10 +322,13 @@ __all__ = [
     "FunctionType",
     "ForKind",
     "MemRef",
+    "Mem",
     "MemorySpace",
     "PipeType",
     "TensorLayout",
+    "TileLayout",
     "TilePad",
+    "TileView",
     "ND",
     "DN",
     "NZ",

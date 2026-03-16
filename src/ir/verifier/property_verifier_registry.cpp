@@ -43,7 +43,7 @@ PropertyVerifierRegistry::PropertyVerifierRegistry() {
   Register(IRProperty::TypeChecked, CreateTypeCheckPropertyVerifier);
   Register(IRProperty::NoNestedCalls, CreateNoNestedCallPropertyVerifier);
   Register(IRProperty::NormalizedStmtStructure, CreateNormalizedStmtPropertyVerifier);
-  Register(IRProperty::FlattenedSingleStmt, CreateFlattenedSingleStmtPropertyVerifier);
+  Register(IRProperty::NoRedundantBlocks, CreateNoRedundantBlocksPropertyVerifier);
   Register(IRProperty::SplitIncoreOrch, CreateSplitIncoreOrchPropertyVerifier);
   Register(IRProperty::ClusterOutlined, CreateClusterOutlinedPropertyVerifier);
   Register(IRProperty::HasMemRefs, CreateHasMemRefsPropertyVerifier);
