@@ -9,6 +9,8 @@
 
 """Emit executable PyTorch code from PyPTO IR for debugging and numerical verification."""
 
+import keyword
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -61,16 +63,24 @@ from collections import deque
 
 _pipes = {'to_aiv': deque(), 'to_aic': deque()}
 
-def _tile_load(tensor, offsets, shapes):
+def _mask_valid_region(tensor, shapes, valid_shapes):
+    if valid_shapes is not None and tuple(valid_shapes) != tuple(shapes):
+        masked = tensor.new_zeros(shapes)
+        valid_slices = tuple(slice(0, s) for s in valid_shapes)
+        masked[valid_slices] = tensor[valid_slices]
+        return masked
+    return tensor
+
+def _tile_load(tensor, offsets, shapes, valid_shapes=None):
     slices = tuple(slice(o, o + s) for o, s in zip(offsets, shapes))
     tile = tensor[slices].clone()
-    # Pad to requested shape if source is smaller (mirrors hardware valid_shapes)
+    # Pad to requested shape if source is smaller (boundary case)
     if tile.shape != tuple(shapes):
         padded = tile.new_zeros(shapes)
         pad_slices = tuple(slice(0, s) for s in tile.shape)
         padded[pad_slices] = tile
-        return padded
-    return tile
+        tile = padded
+    return _mask_valid_region(tile, shapes, valid_shapes)
 
 def _tile_store(tile, offsets, output_tensor):
     slices = tuple(slice(o, o + s) for o, s in zip(offsets, tile.shape))
@@ -80,6 +90,15 @@ def _tile_store(tile, offsets, output_tensor):
 def _tensor_slice(tensor, offsets, shapes):
     slices = tuple(slice(o, o + s) for o, s in zip(offsets, shapes))
     return tensor[slices]
+
+def _write_and_return(container, index, value):
+    container[index] = value
+    return container
+
+def _assemble(target, source, offsets):
+    slices = tuple(slice(o, o + s) for o, s in zip(offsets, source.shape))
+    target[slices] = source
+    return target
 """
 
 # ---------------------------------------------------------------------------
@@ -146,7 +165,7 @@ def _kw_dtype(kw: dict[str, Any]) -> str:
 
 def _handle_tile_load(a: list[str], kw: dict[str, Any]) -> str:
     # args: [tensor, offsets_tuple, shapes_tuple, valid_shapes_tuple]
-    expr = f"_tile_load({a[0]}, {a[1]}, {a[2]})"
+    expr = f"_tile_load({a[0]}, {a[1]}, {a[2]}, {a[3]})"
     if kw.get("transpose"):
         expr += ".mT"
     return expr
@@ -182,9 +201,8 @@ def _handle_reduction(torch_fn: str) -> OpHandler:
 
 
 def _handle_slice(a: list[str], _kw: dict[str, Any]) -> str:
-    # Both tensor.slice and tile.slice use view semantics in torch codegen.
-    # The IR commonly slices output tensors for in-place writes that must
-    # propagate back to the original tensor.
+    # Slice returns a view — valid_shapes is metadata only and must not
+    # trigger masking, otherwise in-place writes won't propagate back.
     return f"_tensor_slice({a[0]}, {a[2]}, {a[1]})"
 
 
@@ -237,8 +255,8 @@ def _register_ops() -> None:
         # fillpad -> identity
         m[f"{prefix}.fillpad"] = _identity()
 
-        # assemble -> slice copy (approximate)
-        m[f"{prefix}.assemble"] = lambda a, _kw: f"{a[0]}"  # returns target (mutated in-place conceptually)
+        # assemble -> write source into target at offset
+        m[f"{prefix}.assemble"] = lambda a, _kw: f"_assemble({a[0]}, {a[1]}, {a[2]})"
 
         # scatter_update
         m[f"{prefix}.scatter_update"] = lambda a, kw: f"{a[0]}.scatter_(-2, {a[1]}.expand_as({a[2]}), {a[2]})"
@@ -263,7 +281,7 @@ def _register_ops() -> None:
     m["tensor.full"] = _handle_full
     m["tensor.slice"] = _handle_slice
     m["tensor.read"] = lambda a, _kw: f"{a[0]}[{a[1]}]"
-    m["tensor.write"] = lambda a, _kw: f"{a[0]}.__setitem__({a[1]}, {a[2]})"
+    m["tensor.write"] = lambda a, _kw: f"_write_and_return({a[0]}, {a[1]}, {a[2]})"
 
     # --- Tile-only ops ---
     m["tile.load"] = _handle_tile_load
@@ -274,7 +292,7 @@ def _register_ops() -> None:
     m["tile.move"] = _identity()
     m["tile.slice"] = _handle_slice
     m["tile.read"] = lambda a, _kw: f"{a[0]}[{a[1]}]"
-    m["tile.write"] = lambda a, _kw: f"{a[0]}.__setitem__({a[1]}, {a[2]})"
+    m["tile.write"] = lambda a, _kw: f"_write_and_return({a[0]}, {a[1]}, {a[2]})"
     m["tile.get_block_idx"] = lambda _a, _kw: "0"
 
     # tile log / relu
@@ -407,6 +425,16 @@ class TorchCodegen(_ir.IRVisitor):
 
     def _unique_name(self, hint: str) -> str:
         base = hint or "v"
+        # Sanitize: replace non-identifier chars with underscore
+        base = re.sub(r"[^a-zA-Z0-9_]", "_", base)
+        # Collapse consecutive underscores
+        base = re.sub(r"__+", "_", base).strip("_") or "v"
+        # Ensure doesn't start with digit
+        if base[0].isdigit():
+            base = f"v_{base}"
+        # Avoid Python keywords
+        if keyword.iskeyword(base):
+            base = f"{base}_v"
         count = self._name_counter.get(base, 0)
         if count == 0:
             self._name_counter[base] = 1
