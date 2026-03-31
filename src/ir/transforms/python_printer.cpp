@@ -54,6 +54,19 @@ namespace ir {
 
 namespace {
 
+/// Convert SplitMode to Python enum member name (UP_DOWN, LEFT_RIGHT).
+std::string SplitModeToPythonString(SplitMode mode) {
+  switch (mode) {
+    case SplitMode::None:
+      return "NONE";
+    case SplitMode::UpDown:
+      return "UP_DOWN";
+    case SplitMode::LeftRight:
+      return "LEFT_RIGHT";
+  }
+  throw pypto::TypeError("Unknown SplitMode");
+}
+
 /// Convert cast round mode integer to its string name for printing.
 /// Inverse of the CAST_MODE_NAMES mapping in python/pypto/ir/utils.py.
 std::string CastModeToString(int mode) {
@@ -1005,7 +1018,13 @@ void IRPythonPrinter::VisitStmt_(const ScopeStmtPtr& op) {
     INTERNAL_CHECK(it != scope_kind_to_dsl.end())
         << "Internal error: Unknown ScopeKind in python_printer: " << ScopeKindToString(op->scope_kind_);
 
-    stream_ << "with " << prefix_ << "." << it->second << "():\n";
+    if (op->scope_kind_ == ScopeKind::AutoInCore && op->split_.has_value() &&
+        op->split_.value() != SplitMode::None) {
+      stream_ << "with " << prefix_ << "." << it->second << "(split=" << prefix_ << ".SplitMode."
+              << SplitModeToPythonString(op->split_.value()) << "):\n";
+    } else {
+      stream_ << "with " << prefix_ << "." << it->second << "():\n";
+    }
   }
 
   IncreaseIndent();
@@ -1197,7 +1216,8 @@ void IRPythonPrinter::VisitFunction(const FunctionPtr& func) {
     bool has_type = func->func_type_ != FunctionType::Opaque;
     bool has_level = func->level_.has_value();
     bool has_role = func->role_.has_value();
-    if (has_type || has_level || has_role) {
+    bool has_split = func->split_.has_value() && func->split_.value() != SplitMode::None;
+    if (has_type || has_level || has_role || has_split) {
       stream_ << "(";
       bool first = true;
       if (has_type) {
@@ -1212,6 +1232,11 @@ void IRPythonPrinter::VisitFunction(const FunctionPtr& func) {
       if (has_role) {
         if (!first) stream_ << ", ";
         stream_ << "role=" << prefix_ << ".Role." << RoleToString(*func->role_);
+        first = false;
+      }
+      if (has_split) {
+        if (!first) stream_ << ", ";
+        stream_ << "split=" << prefix_ << ".SplitMode." << SplitModeToPythonString(func->split_.value());
       }
       stream_ << ")";
     }
