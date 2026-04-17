@@ -1217,7 +1217,7 @@ static const SimpleOpEntry kSimpleOps[] = {
     {"tile.exp",             "pto.texp",             1},
     {"tile.log",             "pto.tlog",             1},
     {"tile.sqrt",            "pto.tsqrt",            1},
-    {"tile.rsqrt",           "pto.trsqrt",           1},
+    // tile.rsqrt is registered with a custom codegen handler below (supports 1 or 2 args).
     {"tile.recip",           "pto.trecip",           1},
     {"tile.neg",             "pto.tneg",             1},
     {"tile.not",             "pto.tnot",             1},
@@ -1371,6 +1371,20 @@ void RegisterPTOOps(Backend& backend, const std::unordered_set<std::string>& exc
   reg("tile.cast", [](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
     return MakeTileCvtCodegenPTO("pto.tcvt", op, codegen);
   });
+  // tile.rsqrt accepts 1 arg (basic) or 2 args (high-precision with tmp workspace).
+  // Both forms emit pto.trsqrt with the appropriate ins() arity. Per ISA, both
+  // inputs (when present) and the output must be row_major.
+  if (exclude_ops.count("tile.rsqrt") == 0) {
+    backend.RegisterOp("tile.rsqrt")
+        .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
+          size_t arity = op->args_.size();
+          CHECK(arity == 1 || arity == 2) << "tile.rsqrt requires 1 or 2 arguments, but got " << arity;
+          return MakeNaryCodegenPTO("pto.trsqrt", arity, op, codegen);
+        })
+        .set_input_layout(0, ir::TileLayout::row_major)
+        .set_input_layout(1, ir::TileLayout::row_major)
+        .set_output_layout(ir::TileLayout::row_major);
+  }
   // tile.full (TEXPANDS): output is row_major per ISA
   if (exclude_ops.count("tile.full") == 0) {
     backend.RegisterOp("tile.full")

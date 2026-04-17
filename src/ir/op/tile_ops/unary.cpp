@@ -18,6 +18,7 @@
  */
 
 #include <any>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
@@ -49,6 +50,41 @@ TypePtr DeduceTileUnaryType(const std::vector<ExprPtr>& args,
                    << args[0]->GetType()->TypeName();
 
   // Unary operations preserve shape and data type
+  TileView tile_view;
+  tile_view.valid_shape = tile_type->shape_;
+  InheritTileViewLayout(tile_view, tile_type);
+  return std::make_shared<TileType>(tile_type->shape_, tile_type->dtype_, std::nullopt, tile_view);
+}
+
+// tile.rsqrt accepts 1 arg (basic mode) or 2 args (high-precision mode with tmp workspace).
+// The tmp tile must match the input in shape and dtype.
+TypePtr DeduceTileRsqrtType(const std::vector<ExprPtr>& args,
+                            const std::vector<std::pair<std::string, std::any>>& kwargs,
+                            const std::string& op_name) {
+  CHECK(args.size() == 1 || args.size() == 2)
+      << "The operator " << op_name << " requires 1 or 2 arguments, but got " << args.size();
+
+  auto tile_type = As<TileType>(args[0]->GetType());
+  CHECK(tile_type) << "The operator " << op_name << " requires first argument to be a TileType, but got "
+                   << args[0]->GetType()->TypeName();
+
+  if (args.size() == 2) {
+    auto tmp_type = As<TileType>(args[1]->GetType());
+    CHECK(tmp_type) << "The operator " << op_name << " requires tmp argument to be a TileType, but got "
+                    << args[1]->GetType()->TypeName();
+    CHECK(tmp_type->dtype_ == tile_type->dtype_)
+        << op_name << ": tmp tile dtype (" << tmp_type->dtype_.ToString() << ") must match input dtype ("
+        << tile_type->dtype_.ToString() << ")";
+    CHECK(tmp_type->shape_.size() == tile_type->shape_.size())
+        << op_name << ": tmp tile rank (" << tmp_type->shape_.size() << ") must match input rank ("
+        << tile_type->shape_.size() << ")";
+    for (size_t i = 0; i < tile_type->shape_.size(); ++i) {
+      CHECK(DimensionsEqual(tmp_type->shape_[i], tile_type->shape_[i]))
+          << op_name << ": tmp tile shape mismatch at dimension " << i << " (tmp: " << tmp_type->shape_[i]
+          << ", input: " << tile_type->shape_[i] << ")";
+    }
+  }
+
   TileView tile_view;
   tile_view.valid_shape = tile_type->shape_;
   InheritTileViewLayout(tile_view, tile_type);
@@ -143,13 +179,17 @@ REGISTER_OP("tile.sqrt")
 
 REGISTER_OP("tile.rsqrt")
     .set_op_category("TileOp")
-    .set_description("Reciprocal square root (1/sqrt(x)) of a tile (element-wise)")
+    .set_description(
+        "Reciprocal square root (1/sqrt(x)) of a tile (element-wise). "
+        "Passing an optional second tmp tile activates the high-precision PTO path.")
     .add_argument("tile", "Input tile (TileType)")
+    .add_argument("tmp", "Optional scratch tile for high-precision path (TileType)")
     .set_input_memory(0, MemorySpace::Vec)
+    .set_input_memory(1, MemorySpace::Vec)
     .set_output_memory(MemorySpace::Vec)
     .f_deduce_type([](const std::vector<ExprPtr>& args,
                       const std::vector<std::pair<std::string, std::any>>& kwargs) {
-      return DeduceTileUnaryType(args, kwargs, "tile.rsqrt");
+      return DeduceTileRsqrtType(args, kwargs, "tile.rsqrt");
     });
 
 REGISTER_OP("tile.cast")

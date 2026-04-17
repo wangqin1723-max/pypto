@@ -289,6 +289,39 @@ class TestTileUnaryOps:
         ir_str = str(Program)
         assert "tile.sqrt" in ir_str
 
+    def test_tile_rsqrt_rejects_tmp_shape_mismatch(self):
+        """tile.rsqrt rejects a tmp tile whose per-dim shape differs from the input."""
+        span = ir.Span.unknown()
+        input_type = ir.TileType([16, 64], DataType.FP32)
+        tmp_type = ir.TileType([32, 64], DataType.FP32)  # rank matches, dim 0 differs
+        input_var = ir.Var("src", input_type, span)
+        tmp_var = ir.Var("tmp", tmp_type, span)
+
+        with pytest.raises(ValueError, match="shape mismatch"):
+            tile.rsqrt(input_var, tmp_var)
+
+    def test_tile_rsqrt_high_precision(self):
+        """tile.rsqrt accepts an optional tmp tile for the high-precision path."""
+
+        @pl.program
+        class Program:
+            @pl.function(type=pl.FunctionType.InCore)
+            def main(
+                self,
+                a: pl.Tensor[[128, 128], pl.FP32],
+                output: pl.Tensor[[128, 128], pl.FP32],
+            ) -> pl.Tensor[[128, 128], pl.FP32]:
+                tile_a: pl.Tile[[32, 32], pl.FP32] = pl.load(a, [0, 0], [32, 32])
+                tmp: pl.Tile[[32, 32], pl.FP32] = pl.tile.create(
+                    [32, 32], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec
+                )
+                tile_c: pl.Tile[[32, 32], pl.FP32] = pl.tile.rsqrt(tile_a, tmp=tmp)
+                result: pl.Tensor[[128, 128], pl.FP32] = pl.store(tile_c, [0, 0], output)
+                return result
+
+        ir_str = str(Program)
+        assert "tile.rsqrt" in ir_str
+
     def test_tile_neg(self):
         """Test tile.neg operator - negate all elements."""
 
