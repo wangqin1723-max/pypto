@@ -139,6 +139,7 @@ from .op.tile_ops import (
 )
 from .op.unified_ops import (
     add,
+    batch_matmul,
     cast,
     col_expand,
     col_expand_div,
@@ -263,6 +264,7 @@ __all__ = [
     "transpose",
     "slice",
     "matmul",
+    "batch_matmul",
     "row_max",
     "row_sum",
     "row_min",
