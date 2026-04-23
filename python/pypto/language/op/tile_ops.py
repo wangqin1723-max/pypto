@@ -884,17 +884,22 @@ def row_min(tile: Tile, tmp_tile: Tile) -> Tile:
     return Tile(expr=call_expr)
 
 
-def col_sum(tile: Tile, tmp_tile: Tile) -> Tile:
+def col_sum(tile: Tile, tmp_tile: Tile | None = None) -> Tile:
     """Column-wise sum reduction.
+
+    Passing ``tmp_tile`` activates the binary-tree reduction path; omitting it
+    uses the sequential path.
 
     Args:
         tile: Input tile
-        tmp_tile: Temporary tile (same shape as input)
+        tmp_tile: Optional scratch tile (same shape/dtype as input) that selects
+            the binary-tree reduction path.
 
     Returns:
         Tile wrapping the col_sum operation
     """
-    call_expr = _ir_ops.col_sum(tile.unwrap(), tmp_tile.unwrap())
+    tmp_expr = None if tmp_tile is None else tmp_tile.unwrap()
+    call_expr = _ir_ops.col_sum(tile.unwrap(), tmp_expr)
     return Tile(expr=call_expr)
 
 
