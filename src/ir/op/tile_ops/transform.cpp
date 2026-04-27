@@ -283,7 +283,6 @@ TypePtr DeduceTileTransposeType(const std::vector<ExprPtr>& args,
   auto axis2_const = As<ConstInt>(args[2]);
   CHECK(axis2_const) << "tile.transpose requires third argument (axis2) to be a ConstInt";
 
-  // Normalize axes (handle negative indexing)
   int axis1 = NormalizeAxis(static_cast<int>(axis1_const->value_), ndim);
   int axis2 = NormalizeAxis(static_cast<int>(axis2_const->value_), ndim);
 
