@@ -723,8 +723,22 @@ static std::string MakeTileLoadCodegenPTO(const CallPtr& op, codegen::CodegenBas
   auto offsets_tuple = As<ir::MakeTuple>(op->args_[1]);
   INTERNAL_CHECK_SPAN(offsets_tuple, op->span_) << "tile.load second argument must be a tuple (offsets)";
 
+  INTERNAL_CHECK_SPAN(op->args_.size() >= 3, op->span_)
+      << "tile.load expects at least 3 arguments (tensor, offsets, shapes), but got " << op->args_.size();
+
   auto shapes_tuple = As<ir::MakeTuple>(op->args_[2]);
   INTERNAL_CHECK_SPAN(shapes_tuple, op->span_) << "tile.load third argument must be a tuple (shapes)";
+
+  // valid_shapes is optional: when omitted (callers built before the 4-arg
+  // signature was introduced, or hand-written IR), fall back to shapes so the
+  // partition_view covers the entire physical region — equivalent to the DSL
+  // behavior `pl.load(..., valid_shapes=None)`.
+  auto valid_shapes_tuple = shapes_tuple;
+  if (op->args_.size() >= 4) {
+    valid_shapes_tuple = As<ir::MakeTuple>(op->args_[3]);
+    INTERNAL_CHECK_SPAN(valid_shapes_tuple, op->span_)
+        << "tile.load fourth argument must be a tuple (valid_shapes)";
+  }
 
   auto tensor_type = As<TensorType>(tensor->GetType());
   INTERNAL_CHECK_SPAN(tensor_type, op->span_) << "tile.load tensor argument must have TensorType";
@@ -743,67 +757,37 @@ static std::string MakeTileLoadCodegenPTO(const CallPtr& op, codegen::CodegenBas
   bool is_dn =
       tensor_type->tensor_view_.has_value() && tensor_type->tensor_view_->layout == ir::TensorLayout::DN;
 
-  // Build partition type with all ND dimensions to match the sizes attribute.
-  // For DN layout, swap the last two shape/offset elements so that the partition
-  // coordinates are in the transposed coordinate system used by make_tensor_view.
-  auto shape_elems = shapes_tuple->elements_;
-  if (is_dn && shape_elems.size() >= 2) {
-    std::iter_swap(shape_elems.rbegin(), shape_elems.rbegin() + 1);
+  // Use valid_shapes (op arg 3) for partition_view sizes so the DMA copy size
+  // matches the logical valid region. When valid_shapes equals the physical
+  // shapes the resulting partition_view is identical to the previous one; when
+  // they differ (e.g. fillpad-on-partial-block), the partition_view becomes
+  // dynamic and tload only fetches the valid region from GM, leaving the
+  // physical padding region in the tile_buf to be written by a downstream
+  // fillpad. For DN layout, swap the last two valid/offset elements so that
+  // the partition coordinates are in the transposed coordinate system used by
+  // make_tensor_view.
+  auto valid_elems = valid_shapes_tuple->elements_;
+  if (is_dn && valid_elems.size() >= 2) {
+    std::iter_swap(valid_elems.rbegin(), valid_elems.rbegin() + 1);
   }
   auto offset_elems = offsets_tuple->elements_;
   if (is_dn && offset_elems.size() >= 2) {
     std::iter_swap(offset_elems.rbegin(), offset_elems.rbegin() + 1);
   }
 
-  std::string partition_type =
-      MakePartitionTensorViewType(GetStaticDimStrings(shape_elems, codegen), dtype_str);
-  std::string partition_view = EmitPartitionViewPTO(tensor->name_hint_, tensor_view, tensor_view_type,
-                                                    partition_type, GetExprCodes(offset_elems, codegen),
-                                                    GetStaticIndexCodes(shape_elems, codegen), codegen);
+  std::string partition_type = MakePartitionTensorViewType(GetDimStrings(valid_elems), dtype_str);
+  std::string partition_view =
+      EmitPartitionViewPTO(tensor->name_hint_, tensor_view, tensor_view_type, partition_type,
+                           GetExprCodes(offset_elems, codegen), GetSizeCodes(valid_elems, codegen), codegen);
 
   std::ostringstream tload_line;
   tload_line << "pto.tload ins(" << partition_view << " : " << partition_type << ") outs(";
   tload_line << tile_buf << " : " << tile_buf_type << ")";
   codegen.Emit(tload_line.str());
 
-  // Emit pto.set_validshape after tload only when a fillpad consumer exists.
-  // Physical dims were used for alloc_tile (correct DMA stride); set_validshape
-  // sets the actual valid region before fillpad pads the rest.
-  auto result_var = codegen.GetCurrentResultVar();
-  if (result_var) {
-    auto tile_type = ir::As<ir::TileType>(result_var->GetType());
-    if (tile_type && tile_type->tile_view_.has_value() && codegen.HasFillpadConsumer(result_var.get())) {
-      const auto& tv = tile_type->tile_view_.value();
-      bool has_dynamic = false;
-      std::string vr, vc;
-
-      // Extract valid_row SSA
-      if (tv.valid_shape.size() >= 1) {
-        if (auto var = ir::As<ir::Var>(tv.valid_shape[0])) {
-          std::string mlir_name = codegen.GetVarName(var);
-          vr = codegen.EmitCastToIndex(var, mlir_name);
-          has_dynamic = true;
-        } else if (auto c = ir::As<ir::ConstInt>(tv.valid_shape[0])) {
-          vr = codegen.GetOrEmitConstant(c->value_, DataType::INDEX);
-        }
-      }
-
-      // Extract valid_col SSA
-      if (tv.valid_shape.size() >= 2) {
-        if (auto var = ir::As<ir::Var>(tv.valid_shape[1])) {
-          std::string mlir_name = codegen.GetVarName(var);
-          vc = codegen.EmitCastToIndex(var, mlir_name);
-          has_dynamic = true;
-        } else if (auto c = ir::As<ir::ConstInt>(tv.valid_shape[1])) {
-          vc = codegen.GetOrEmitConstant(c->value_, DataType::INDEX);
-        }
-      }
-
-      if (has_dynamic && !vr.empty() && !vc.empty()) {
-        codegen.Emit("pto.set_validshape " + tile_buf + ", " + vr + ", " + vc + " : " + tile_buf_type);
-      }
-    }
-  }
+  // No follow-up `pto.set_validshape` is emitted: every `pto.alloc_tile`
+  // already carries the desired `valid_row` / `valid_col` operands, and the
+  // partition_view above already reflects the same valid region.
 
   return "";
 }
