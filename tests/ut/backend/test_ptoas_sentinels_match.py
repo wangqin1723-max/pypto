@@ -22,6 +22,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pypto import ir
 from pypto.backend import pto_backend
 from pypto.pypto_core.passes import MemoryPlanner
 from pypto.runtime.debug import pto_rebuild
@@ -172,6 +173,28 @@ def test_rebuild_preserves_fixed_multi_buffer_addresses() -> None:
         "--enable-insert-sync",
         "--pto-level=level3",
     ]
+
+
+def test_a5_aiv_buffer_id_sync_survives_pto_rebuild(tmp_path, monkeypatch) -> None:
+    func = SimpleNamespace(name="gather", func_type=ir.FunctionType.AIV, attrs={"ptoas_buffer_id_sync": True})
+    files = {}
+    monkeypatch.setattr(pto_backend, "_get_kernel_output_path", lambda *_: "gather.pto")
+    pto_backend._emit_single_function_output(
+        files, func, 'module attributes {pto.target_arch = "a5"} {\n}', str(tmp_path), skip_ptoas=True
+    )
+    code = files["gather.pto"]
+    assert pto_rebuild._ptoas_flags(code) == ["--enable-bufid_sync", "--pto-level=level2"]
+
+    def fake_run_ptoas(pto_path, output_path, ptoas_flags=None):
+        assert Path(pto_path).read_text() == code
+        assert ptoas_flags == ["--enable-bufid_sync", "--pto-level=level2"]
+        Path(output_path).write_text("generated cpp")
+
+    monkeypatch.setattr(pto_backend, "_run_ptoas", fake_run_ptoas)
+    handler = SimpleNamespace(get_extra_ptoas_flags=lambda: [])
+    monkeypatch.setattr(pto_backend._backend_core, "get_handler", lambda: handler)
+    result = pto_backend._compile_pto_module(code, "gather", str(tmp_path), MemoryPlanner.PTOAS)
+    assert result == "generated cpp"
 
 
 if __name__ == "__main__":

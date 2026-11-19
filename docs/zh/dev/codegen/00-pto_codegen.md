@@ -39,6 +39,12 @@ ISA 将 INT32 中间结果保存在 scratch 中，不会写回输入。
 - **基于 Tile 变量的分配**: 为每个 Tile 变量生成带显式 `addr` 的 `pto.alloc_tile` 操作
 - **类型 (Type) 感知转换**: 从 TileType 元数据推导 tile_buf/tensor_view 类型
 
+### 同步模式选择
+
+独立的 A5 AIV 函数可以用 `pl.func_attr({"ptoas_buffer_id_sync": True})`
+启用 PTOAS 的 buffer ID 同步。该函数的 PTOAS 调用使用
+`--enable-bufid_sync`。生成的 PTO 会记录这一选择，重编产物时使用相同模式。
+
 ### 生成顺序
 
 有限浮点常量使用十进制科学计数法，NaN 和无穷使用目标类型位宽的十六进制位模式。

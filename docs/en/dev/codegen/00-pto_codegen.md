@@ -39,6 +39,13 @@ Codegen must be a **strict 1-to-1 translation** from IR to generated code. Each 
 - **MemRef-based Allocation**: Maps IR MemRef objects to `pto.alloc_tile` operations
 - **Type-aware Conversion**: Derives tile_buf/tensor_view types from TileType metadata
 
+### Synchronization selection
+
+A standalone A5 AIV function can request PTOAS buffer-ID synchronization with
+`pl.func_attr({"ptoas_buffer_id_sync": True})`. This selects
+`--enable-bufid_sync` for that function's PTOAS invocation. The emitted PTO
+carries the selection so rebuilding the artifact uses the same mode.
+
 ### Generation Order
 
 Floating-point constants use decimal scientific notation for finite values and
