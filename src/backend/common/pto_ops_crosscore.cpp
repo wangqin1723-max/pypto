@@ -227,6 +227,7 @@ static std::string FormatFrontendPipeAttrs(const CallPtr& op, int split) {
 static std::string FormatInitializePipeAttrs(const CallPtr& op, int dir_mask, int slot_size,
                                              const BackendHandler& handler) {
   const bool epilogue = op->HasKwarg("c2v_dtype");
+  const bool broadcast = op->GetKwarg<bool>("broadcast", false);
   const bool relu = op->GetKwarg<bool>("pre_relu", false);
   CHECK_SPAN(!relu || epilogue, op->span_) << "pre_relu requires an explicit c2v_dtype";
   CHECK_SPAN(!epilogue || (dir_mask == 1 && handler.SupportsC2VFixpipeEpilogue()), op->span_)
@@ -235,6 +236,8 @@ static std::string FormatInitializePipeAttrs(const CallPtr& op, int dir_mask, in
   CHECK_SPAN(!epilogue || dtype == DataType::FP32 || dtype == DataType::FP16 || dtype == DataType::BF16,
              op->span_)
       << "c2v_dtype must be FP32, FP16, or BF16, got " << dtype.ToString();
+  CHECK_SPAN(!broadcast || (epilogue && dtype == DataType::BF16 && !relu), op->span_)
+      << "C2V broadcast requires c2v_dtype=BF16 and pre_relu=False";
   std::ostringstream oss;
   oss << "{";
   if (op->HasKwarg("id")) {
@@ -254,7 +257,11 @@ static std::string FormatInitializePipeAttrs(const CallPtr& op, int dir_mask, in
                               << local_slot_num;
     oss << ", local_slot_num = " << local_slot_num;
   }
-  if (epilogue) {
+  if (broadcast) {
+    // A5 broadcast is lowered in the kernel wrapper. The assembler models
+    // each pop as a whole tile and still inserts its FIFO dependencies.
+    oss << ", nosplit = false";
+  } else if (epilogue) {
     // This is a per-pipe contract, not a per-push setting. PTOAS validates the
     // peer initializer, FP32 Acc producer and typed non-split consumer together.
     const char* quant = dtype == DataType::BF16   ? "f32_bf16"
@@ -301,8 +308,12 @@ static std::string MakeTpushCodegenPTO(const char* target, const CallPtr& op,
 
   std::string tile_buf = codegen.GetExprAsCode(op->args_[0]);
   std::string tile_type = codegen.GetExprTypeAnnotation(op->args_[0]);
+  // A typed BF16 pipe uses split=1 only for broadcast, where split selects
+  // the two-lane FIFO protocol. FixPipe must read the Acc's actual valid rows.
+  const bool broadcast = std::string_view(target) == "aiv" && split == ir::kSplitUpDown &&
+                         codegen.GetC2VPipeDtype(op->GetKwarg<int>("id", 0)) == DataType::BF16;
   const bool restore_valid_shape =
-      EmitTpushTransportValidShape(target, op, codegen, tile_buf, tile_type, split);
+      !broadcast && EmitTpushTransportValidShape(target, op, codegen, tile_buf, tile_type, split);
 
   std::ostringstream oss;
   oss << "pto.tpush_to_" << target << "(" << tile_buf;
@@ -534,6 +545,9 @@ static std::string MakeInitializePipeCodegenPTO(const char* target, const CallPt
   std::string v2c_ssa = GetPipeBufOperandI32SSA(codegen, op->args_[1]);
   CHECK(!c2v_ssa.empty() && !v2c_ssa.empty()) << op_name << ": failed to lower buffer operands to SSA names";
 
+  if (op->GetKwarg<bool>("broadcast", false)) {
+    codegen.Emit("// pypto.a5_c2v_bf16_broadcast");
+  }
   std::ostringstream oss;
   oss << "pto." << target << "_initialize_pipe "
       << FormatInitializePipeAttrs(op, dir_mask, slot_size, *codegen.GetBackendHandler());

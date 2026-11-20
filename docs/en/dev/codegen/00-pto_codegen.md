@@ -346,6 +346,17 @@ or call `set_validshape` on the source tile before taking the view.
 | `system.syncall(core_type=C)` | `pto.syncall() mode = #pto.sync_all_mode<hard>, core_type = #pto.sync_core_type<C>` | Cross-core all-participant barrier (hard/FFTS form) |
 | `system.syncall(mode="soft", core_type=C, gm_workspace=ws, used_cores=N)` | `pto.syncall(%gm_ptr[, %used] : !pto.ptr<i32>[, i32]) mode = #pto.sync_all_mode<soft>, core_type = #pto.sync_core_type<C>` | Current PTO-ISA soft/GM-polling barrier (partial occupancy; at least 64-byte GM workspace; explicit `N=0` derives the count from device launch registers and omits `%used`) |
 
+An A5 C2V pipe with `c2v_dtype=pl.BF16, broadcast=True` sends the same rounded tile to both AIV lanes.
+Use one explicit C2V pipe per mixed kernel. Both initializers must agree on the slot geometry and options.
+The AIV code uses `pl.split_aiv(2, mode=pl.SplitMode.NONE)` and each lane pops the whole tile and frees it.
+Use `split=1` on the endpoints to select two-lane FIFO signaling. Each push and pop uses the same physical
+tile shape, and different panels in the same pipe may use different shapes that fit its slots.
+
+The wrapper uses Buffer ID synchronization for this group. Set `ptoas_plan_memory=True` on both initializers
+in an automatically outlined mixed kernel to let PTOAS assign that group's on-chip addresses. If
+`pl.import_peer_buffer` omits `peer_func` in an outlined mixed kernel, it binds to the other member by name
+after outlining.
+
 With explicit `c2v_dtype` on an A5 C2V-only initializer, codegen additionally
 emits `nosplit = true` and `acc_push_epilogue`. For `c2v_dtype=pl.BF16,
 pre_relu=True`, the extra attribute is:

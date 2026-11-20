@@ -473,12 +473,13 @@ def reserve_buffer(*, name: str, size: int, base: int = AUTO, span: Span | None 
     return Scalar(DataType.INT32, call)
 
 
-def import_peer_buffer(*, name: str, peer_func: str, span: Span | None = None) -> Scalar:
+def import_peer_buffer(*, name: str, peer_func: str = "", span: Span | None = None) -> Scalar:
     """Import a buffer from a peer function in the same group.
 
     Args:
         name: Buffer name to import (must match peer's reserve_buffer name).
-        peer_func: Name of the peer function that owns the buffer.
+        peer_func: Name of the peer function that owns the buffer. Omit it in
+            an automatically outlined mixed kernel to select the other member.
         span: Optional source span.
 
     Returns:

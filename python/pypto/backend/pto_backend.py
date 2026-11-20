@@ -51,6 +51,7 @@ from pypto._function_attrs import (
     EXTERNAL_PREFLIGHT_SOURCE_ATTR,
     EXTERNAL_SOURCE_ATTR,
 )
+from pypto.backend import _a5_bf16_broadcast
 from pypto.backend._host_tensor_args import host_tensor_indices as _host_tensor_indices
 from pypto.backend._ptoas_config import PTOAS_BUFFER_ID_SYNC_MARKER
 from pypto.backend._ptoas_config import PTOAS_TIMEOUT_ENV as _PTOAS_TIMEOUT_ENV
@@ -1300,6 +1301,7 @@ def _generate_kernel_wrapper(
     ptoas_code: str,
     *,
     group_uses_spmd: bool = False,
+    bf16_broadcast: bool = False,
 ) -> str:
     """Generate a complete kernel wrapper file for one InCore function.
 
@@ -1412,6 +1414,7 @@ def _generate_kernel_wrapper(
         'extern "C" __aicore__ __attribute__((always_inline)) '
         "void kernel_entry(__gm__ int64_t* args)\n"
         "{\n"
+        f"{_a5_bf16_broadcast.FOOTER if bf16_broadcast else ''}"
         "#if !defined(__CPU_SIM) && !defined(__COSTMODEL)\n"
         "    // Reset AI Core atomic mode inherited from a prior kernel.\n"
         "    set_atomic_none();\n"
@@ -1434,6 +1437,7 @@ def _generate_kernel_wrapper(
     urma_transfer_adapter = _generate_urma_transfer_adapter(func) if func_uses_urma_transfer else ""
     return (
         f"{header}\n{deferred_completion_adapter}{urma_transfer_adapter}{fifo_lane_arg_bridge}"
+        f"{_a5_bf16_broadcast.HEADER if bf16_broadcast else ''}"
         f"// --- ptoas-generated code ---\n{ptoas_body}\n{fifo_lane_arg_cleanup}{wrapper_func}"
     )
 
@@ -1848,6 +1852,7 @@ def _emit_single_function_output(
     dump_ptoas_passes: bool = False,
 ) -> None:
     """Emit output files for one InCore function."""
+    _a5_bf16_broadcast.validate([func], pto_code)
     if _requests_buffer_id_sync(func):
         header, newline, body = pto_code.partition("\n")
         if func.func_type != _ir_core.FunctionType.AIV or 'pto.target_arch = "a5"' not in header:
@@ -1887,6 +1892,17 @@ def _requests_buffer_id_sync(func: _ir_core.Function) -> bool:
     return enabled
 
 
+def _group_memory_planner(
+    members: list[_ir_core.Function], default: _passes.MemoryPlanner
+) -> _passes.MemoryPlanner:
+    overrides = [func.attrs.get("ptoas_plan_memory", False) for func in members]
+    if any(overrides):
+        if not all(overrides):
+            raise ValueError("Grouped kernels must agree on ptoas_plan_memory")
+        return _passes.MemoryPlanner.PTOAS
+    return default
+
+
 def _emit_group_output(
     result_files: dict[str, str],
     group_name: str,
@@ -1898,6 +1914,14 @@ def _emit_group_output(
     dump_ptoas_passes: bool = False,
 ) -> None:
     """Emit output files for one grouped MLIR module."""
+    memory_planner = _group_memory_planner(members, memory_planner)
+    bf16_broadcast = _a5_bf16_broadcast.validate(members, pto_code)
+    if bf16_broadcast:
+        aiv = next(func for func in members if func.func_type == _ir_core.FunctionType.AIV)
+        if not _requires_dual_aiv_dispatch(aiv):
+            raise ValueError("C2V broadcast requires dispatch to both AIV lanes")
+        header, newline, body = pto_code.partition("\n")
+        pto_code = f"{header}{newline}{PTOAS_BUFFER_ID_SYNC_MARKER}\n{body}"
     if any(_requests_buffer_id_sync(func) for func in members):
         raise ValueError("ptoas_buffer_id_sync requires a standalone A5 AIV function")
     if skip_ptoas:
@@ -1923,7 +1947,7 @@ def _emit_group_output(
     group_uses_spmd = any(_uses_spmd_block_ops(f) for f in members)
     for func in members:
         result_files[_get_kernel_output_path(func, "cpp")] = _generate_kernel_wrapper(
-            func, ptoas_cpp, group_uses_spmd=group_uses_spmd
+            func, ptoas_cpp, group_uses_spmd=group_uses_spmd, bf16_broadcast=bf16_broadcast
         )
 
 
@@ -2710,7 +2734,7 @@ def _generate_single_chip(
             pto_code, helpers, entry_helpers = _generate_pto_bundle(
                 grouped_program,
                 skip_ptoas=skip_ptoas,
-                memory_planner=memory_planner,
+                memory_planner=_group_memory_planner(members, memory_planner),
                 emit_source_loc=emit_source_loc,
                 is_group=True,
             )

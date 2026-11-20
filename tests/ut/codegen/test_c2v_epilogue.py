@@ -19,7 +19,7 @@ from pypto.debug import torch_codegen
 from pypto.ir.pass_manager import OptimizationStrategy, PassManager
 
 
-def make_program(
+def make_program(  # noqa: PLR0913
     dtype=pl.BF16,
     relu=True,
     *,
@@ -29,6 +29,9 @@ def make_program(
     split=0,
     input_dtype=pl.BF16,
     slot_size=None,
+    broadcast=False,
+    peer_broadcast=None,
+    dual_aiv_dispatch=True,
 ):
     """Keep the protocol explicit; no Vector cast or ReLU exists to fold."""
     names = {pl.FP32: "FP32", pl.FP16: "FP16", pl.BF16: "BF16", pl.INT8: "INT8", pl.INT32: "INT32"}
@@ -37,6 +40,8 @@ def make_program(
     popped = names[pop_dtype or dtype]
     stored = "value" if popped == target else f'pl.cast(value, pl.{target}, mode="rint")'
     peer_relu = relu if peer_relu is None else peer_relu
+    peer_broadcast = broadcast if peer_broadcast is None else peer_broadcast
+    aiv_attrs = 'pl.func_attr({"split_aiv": True})' if broadcast and dual_aiv_dispatch else ""
     if slot_size is None:
         slot_size = 64 * 128 * dtype.get_bit() // 8
     # Integer inputs are used only for malformed-producer tests. Avoid an
@@ -52,7 +57,7 @@ class Program:
         peer = pl.import_peer_buffer(name="scores", peer_func="consumer")
         pl.aic_initialize_pipe(c2v_consumer_buf=peer, dir_mask=1,
             slot_size={slot_size}, slot_num=2, id={pipe_id},
-            c2v_dtype=pl.{target}, pre_relu={relu})
+            c2v_dtype=pl.{target}, pre_relu={relu}, broadcast={broadcast})
         for iteration in pl.range(3):
             a_mat = pl.load(a, [0, 0], [64, 128], target_memory=pl.Mem.Mat)
             b_mat = pl.load(b, [0, 0], [128, 128], target_memory=pl.Mem.Mat)
@@ -67,10 +72,11 @@ class Program:
                  b: pl.Tensor[[128, 128], pl.{inputs}],
                  out: pl.Out[pl.Tensor[[64, 128], pl.{target}]],
                  raw: pl.Out[pl.Tensor[[64, 128], pl.FP32]]):
+        {aiv_attrs}
         buf = pl.reserve_buffer(name="scores", size={slot_size * 2})
         pl.aiv_initialize_pipe(c2v_consumer_buf=buf, dir_mask=1,
             slot_size={slot_size}, slot_num=2, id={pipe_id},
-            c2v_dtype=pl.{target}, pre_relu={peer_relu})
+            c2v_dtype=pl.{target}, pre_relu={peer_relu}, broadcast={peer_broadcast})
         for iteration in pl.range(3):
             value = pl.tpop_from_aic(shape=[64, 128], dtype=pl.{popped},
                                      split={split}, id={pipe_id})
@@ -134,6 +140,105 @@ def test_explicit_epilogue_compiles(tmp_path, dtype, quant, isa_quant, relu):
     assert f"QuantMode_t::{isa_quant}" in cpp
     assert f"ReluPreMode::{'NormalRelu' if relu else 'NoRelu'}" in cpp
     assert "TPUSH" in cpp
+
+
+@pytest.mark.skipif(find_ptoas_binary() is None, reason="PTOAS is not available")
+@pytest.mark.ptoas_compile
+def test_a5_bf16_broadcast_emits_two_lane_transport(tmp_path):
+    program, pto = lower(make_program(relu=False, split=1, broadcast=True))
+    assert pto.count("// pypto.a5_c2v_bf16_broadcast") == 2
+    assert pto.count("nosplit = false") == 2
+    assert "acc_push_epilogue" not in pto
+
+    members = [f for f in program.functions.values() if ir.is_incore_type(f.func_type)]
+    result = {}
+    pto_backend._emit_group_output(result, "group", members, pto, str(tmp_path), False)
+    producer = result["kernels/aic/producer.cpp"]
+    consumer = result["kernels/aiv/consumer.cpp"]
+    assert "AccToVecMode::SingleModeVec0" in producer
+    assert "AccToVecMode::SingleModeVec1" in producer
+    assert "#define TPUSH PyptoA5BroadcastPush" in producer
+    assert "TileSplitAxis::TILE_UP_DOWN" in consumer
+    assert "if (get_subblockid() == 0)" not in consumer
+
+
+def test_a5_bf16_broadcast_requires_both_initializers(tmp_path):
+    program, pto = lower(make_program(relu=False, split=1, broadcast=True, peer_broadcast=False))
+    members = [f for f in program.functions.values() if ir.is_incore_type(f.func_type)]
+    with pytest.raises(ValueError, match="matching producer and consumer initializers"):
+        pto_backend._emit_group_output({}, "group", members, pto, str(tmp_path), True)
+
+
+def test_a5_bf16_broadcast_rejects_automatically_halved_payload(tmp_path):
+    program, pto = lower(make_program(relu=False, split=1, broadcast=True, dual_aiv_dispatch=False))
+    members = [f for f in program.functions.values() if ir.is_incore_type(f.func_type)]
+    with pytest.raises(ValueError, match="matching slot configuration and push/pop shapes"):
+        pto_backend._emit_group_output({}, "group", members, pto, str(tmp_path), True)
+
+
+@pytest.mark.skipif(find_ptoas_binary() is None, reason="PTOAS is not available")
+@pytest.mark.ptoas_compile
+def test_broadcast_can_delegate_memory_planning_for_its_group(tmp_path):
+    @pl.program
+    class Mixed:
+        @pl.function(type=pl.FunctionType.AIV)
+        def independent(self, a: pl.Tensor[[64, 128], pl.BF16], out: pl.Out[pl.Tensor[[128, 128], pl.BF16]]):
+            tile = pl.load(a, [0, 0], [16, 128])
+            pl.store(tile, [0, 0], out)
+
+        @pl.function(type=pl.FunctionType.Orchestration)
+        def main(
+            self,
+            a: pl.Tensor[[64, 128], pl.BF16],
+            b: pl.Tensor[[128, 128], pl.BF16],
+            out: pl.Out[pl.Tensor[[128, 128], pl.BF16]],
+            auxiliary: pl.Out[pl.Tensor[[128, 128], pl.BF16]],
+        ):
+            with pl.at(level=pl.Level.CORE_GROUP, name_hint="projection"):
+                peer = pl.import_peer_buffer(name="panels")
+                pl.aic_initialize_pipe(
+                    c2v_consumer_buf=peer,
+                    dir_mask=1,
+                    slot_size=16384,
+                    slot_num=2,
+                    c2v_dtype=pl.BF16,
+                    broadcast=True,
+                    ptoas_plan_memory=True,
+                )
+                reserved = pl.reserve_buffer(name="panels", size=32768)
+                pl.aiv_initialize_pipe(
+                    c2v_consumer_buf=reserved,
+                    dir_mask=1,
+                    slot_size=16384,
+                    slot_num=2,
+                    c2v_dtype=pl.BF16,
+                    broadcast=True,
+                    ptoas_plan_memory=True,
+                )
+                a_mat = pl.load(a, [0, 0], [64, 128], target_memory=pl.Mem.Mat)
+                b_mat = pl.load(b, [0, 0], [128, 128], target_memory=pl.Mem.Mat)
+                left = pl.move(a_mat, target_memory=pl.Mem.Left)
+                right = pl.move(b_mat, target_memory=pl.Mem.Right)
+                acc = pl.matmul(left, right)
+                pl.tpush_to_aiv(acc, split=1)
+                for lane in pl.split_aiv(2, mode=pl.SplitMode.NONE):
+                    panel = pl.tpop_from_aic(shape=[64, 128], dtype=pl.BF16, split=1)
+                    pl.store(panel, [lane * 64, 0], out)
+                    pl.tfree_to_aic(panel)
+            self.independent(a, auxiliary)
+
+    backend.set_backend_type(backend.BackendType.Ascend950)
+    with passes.PassContext([], enable_buffer_ir=False):
+        after = PassManager.get_strategy(OptimizationStrategy.Default).run_passes(Mixed)
+    for name in ("projection_aic", "projection_aiv"):
+        assert after.get_function(name).attrs["ptoas_plan_memory"]
+
+    pto_backend.generate(after, str(tmp_path))
+    projection = (tmp_path / "ptoas/projection.pto").read_text()
+    independent = (tmp_path / "ptoas/independent.pto").read_text()
+    assert "peer_func = @projection_aiv" in projection
+    assert "pto.alloc_tile addr =" not in projection
+    assert "pto.alloc_tile addr =" in independent
 
 
 @pytest.mark.skipif(find_ptoas_binary() is None, reason="PTOAS is not available")
@@ -245,6 +350,8 @@ def test_defaults_preserve_existing_pipe(initializer):
     call = initializer(dir_mask=1, slot_size=1024, pre_relu=False)
     assert "c2v_dtype" not in call.kwargs
     assert "pre_relu" not in call.kwargs
+    assert "broadcast" not in call.kwargs
+    assert "ptoas_plan_memory" not in call.kwargs
     with pytest.raises(ValueError, match="requires an explicit c2v_dtype"):
         initializer(dir_mask=1, slot_size=1024, pre_relu=True)
     with pytest.raises(TypeError, match="must be a DataType"):

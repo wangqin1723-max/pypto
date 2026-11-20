@@ -314,6 +314,15 @@ tile 调用 `set_validshape`。
 | `system.syncall(core_type=C)` | `pto.syncall() mode = #pto.sync_all_mode<hard>, core_type = #pto.sync_core_type<C>` | 跨核全员屏障（hard/FFTS 形态） |
 | `system.syncall(mode="soft", core_type=C, gm_workspace=ws, used_cores=N)` | `pto.syncall(%gm_ptr[, %used] : !pto.ptr<i32>[, i32]) mode = #pto.sync_all_mode<soft>, core_type = #pto.sync_core_type<C>` | 当前 PTO-ISA 的 soft/GM 轮询屏障（部分占用即可；GM workspace 至少 64 字节；显式 `N=0` 时从设备启动寄存器推导并省略 `%used`） |
 
+在 A5 上，设置 `c2v_dtype=pl.BF16, broadcast=True` 的 C2V 管道会向两个 AIV lane 发送同一块舍入后的 tile。
+每个混合核使用一条显式 C2V 管道，两端初始化参数一致。AIV 使用 `pl.split_aiv(2, mode=pl.SplitMode.NONE)`，
+每个 lane 取出完整 tile 并归还槽位。端点设置 `split=1` 以启用双 lane FIFO 信号。每次 push 和 pop
+的物理形状一致，同一管道也可以传输不同形状的 panel，只要每个 panel 都能放入槽位。
+
+生成的混合核使用 Buffer ID 同步。自动提取的混合核可在两端初始化时设置 `ptoas_plan_memory=True`，
+由 PTOAS 规划该核的片上地址。自动提取的混合核中，`pl.import_peer_buffer` 省略 `peer_func` 时，
+编译器会在提取后绑定到另一侧成员函数。
+
 A5 C2V 单向管道显式提供 `c2v_dtype` 时，代码生成还会输出 `nosplit = true` 和
 `acc_push_epilogue`。例如，`c2v_dtype=pl.BF16, pre_relu=True` 对应：
 
