@@ -46,6 +46,11 @@ A standalone A5 AIV function can request PTOAS buffer-ID synchronization with
 `--enable-bufid_sync` for that function's PTOAS invocation. The emitted PTO
 carries the selection so rebuilding the artifact uses the same mode.
 
+An outlined mixed A5 kernel can set `ptoas_buffer_id_sync=True` in both
+`aic_initialize_pipe` and `aiv_initialize_pipe`. The setting applies to the
+entire mixed module. Setting `ptoas_plan_memory=True` on both initializers
+also delegates that module's on-chip memory planning to PTOAS.
+
 ### Generation Order
 
 Floating-point constants use decimal scientific notation for finite values and

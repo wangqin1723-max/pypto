@@ -1887,6 +1887,17 @@ def _requests_buffer_id_sync(func: _ir_core.Function) -> bool:
     return enabled
 
 
+def _group_memory_planner(
+    members: list[_ir_core.Function], default: _passes.MemoryPlanner
+) -> _passes.MemoryPlanner:
+    overrides = [func.attrs.get("ptoas_plan_memory", False) for func in members]
+    if any(overrides):
+        if not all(overrides):
+            raise ValueError("Grouped kernels must agree on ptoas_plan_memory")
+        return _passes.MemoryPlanner.PTOAS
+    return default
+
+
 def _emit_group_output(
     result_files: dict[str, str],
     group_name: str,
@@ -1898,8 +1909,16 @@ def _emit_group_output(
     dump_ptoas_passes: bool = False,
 ) -> None:
     """Emit output files for one grouped MLIR module."""
-    if any(_requests_buffer_id_sync(func) for func in members):
-        raise ValueError("ptoas_buffer_id_sync requires a standalone A5 AIV function")
+    memory_planner = _group_memory_planner(members, memory_planner)
+    member_buffer_id_sync = [_requests_buffer_id_sync(func) for func in members]
+    buffer_id_sync = any(member_buffer_id_sync)
+    if buffer_id_sync and not all(member_buffer_id_sync):
+        raise ValueError("Grouped kernels must agree on ptoas_buffer_id_sync")
+    if buffer_id_sync:
+        header, newline, body = pto_code.partition("\n")
+        if 'pto.target_arch = "a5"' not in header or 'pto.backend = "vpto"' in header:
+            raise ValueError("ptoas_buffer_id_sync requires A5 PTO code generation")
+        pto_code = f"{header}{newline}{PTOAS_BUFFER_ID_SYNC_MARKER}\n{body}"
     if skip_ptoas:
         result_files[os.path.join("kernels", f"{group_name}.pto")] = pto_code
         return
@@ -2710,7 +2729,7 @@ def _generate_single_chip(
             pto_code, helpers, entry_helpers = _generate_pto_bundle(
                 grouped_program,
                 skip_ptoas=skip_ptoas,
-                memory_planner=memory_planner,
+                memory_planner=_group_memory_planner(members, memory_planner),
                 emit_source_loc=emit_source_loc,
                 is_group=True,
             )

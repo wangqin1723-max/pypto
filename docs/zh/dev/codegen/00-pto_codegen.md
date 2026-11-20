@@ -45,6 +45,11 @@ ISA 将 INT32 中间结果保存在 scratch 中，不会写回输入。
 启用 PTOAS 的 buffer ID 同步。该函数的 PTOAS 调用使用
 `--enable-bufid_sync`。生成的 PTO 会记录这一选择，重编产物时使用相同模式。
 
+自动提取的 A5 混合内核可以在 `aic_initialize_pipe` 和
+`aiv_initialize_pipe` 中同时设置 `ptoas_buffer_id_sync=True`，让整个混合模块
+使用 buffer ID 同步。两个初始化器同时设置 `ptoas_plan_memory=True` 时，由
+PTOAS 负责该模块的片上内存规划。
+
 ### 生成顺序
 
 有限浮点常量使用十进制科学计数法，NaN 和无穷使用目标类型位宽的十六进制位模式。
